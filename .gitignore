@@ -1,0 +1,22 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+
+# tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# local analysis artefacts — never commit APKs or reports
+*.apk
+*.dex
+*.aab
+*.sarif
+report*.html
+
+# os
+.DS_Store

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tadori — {{ result.app.package or result.app.name }}</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1b1f24; --muted: #6a737d; --line: #e1e4e8;
+    --card: #f6f8fa; --critical: #b02a37; --high: #d1242f; --medium: #bf8700;
+    --low: #1a7f37; --accent: #3f5fbf;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
+      --card: #161b22; --critical: #ff7b72; --high: #ff7b72; --medium: #d29922;
+      --low: #3fb950; --accent: #79a5ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 2rem 1.25rem 4rem; background: var(--bg); color: var(--fg);
+         font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 60rem; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.05rem; margin: 2.5rem 0 .75rem; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .86em; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; }
+  .score { display: flex; align-items: baseline; gap: .6rem; padding: 1rem 1.25rem;
+           background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+  .score b { font-size: 2rem; line-height: 1; }
+  .score.critical b, .score.critical .verdict { color: var(--critical); }
+  .score.high b, .score.high .verdict { color: var(--high); }
+  .score.medium b, .score.medium .verdict { color: var(--medium); }
+  .score.low b, .score.low .verdict { color: var(--low); }
+  .chips { margin: 1rem 0 0; display: flex; flex-wrap: wrap; gap: .4rem; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: .1rem .6rem;
+          color: var(--muted); font-size: .8rem; }
+  .cap { border: 1px solid var(--line); border-left: 4px solid var(--line);
+         border-radius: 6px; padding: .9rem 1.1rem; margin: 0 0 .9rem; }
+  .cap.high { border-left-color: var(--high); }
+  .cap.medium { border-left-color: var(--medium); }
+  .cap.low, .cap.info { border-left-color: var(--low); }
+  .cap header { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem; }
+  .cap .rid { font-weight: 600; }
+  .cap .sev { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+              border: 1px solid var(--line); border-radius: 4px; padding: 0 .35rem; }
+  .cap .desc { color: var(--muted); margin: .4rem 0 0; }
+  .site { margin: .8rem 0 0; padding-left: .9rem; border-left: 2px dashed var(--line); }
+  .site .loc { font-weight: 500; }
+  .reach { color: var(--accent); }
+  .ev { color: var(--muted); }
+  .ev span { display: inline-block; min-width: 5.5rem; color: var(--fg); opacity: .55; }
+  .path { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid var(--line); }
+  footer { color: var(--muted); margin-top: 3rem; font-size: .85rem; }
+  .warn { background: var(--card); border: 1px solid var(--medium); border-radius: 6px;
+          padding: .6rem .9rem; margin: .5rem 0; color: var(--medium); }
+</style>
+</head>
+<body>
+<main>
+  <h1>{{ result.app.package or result.app.name }}
+    {% if result.app.version_name %}<span class="mono">{{ result.app.version_name }}</span>{% endif %}
+  </h1>
+  <p class="sub mono">{{ result.app.name }} · {{ "{:,}".format(result.app.method_count) }} methods ·
+    {{ result.app.dex_count }} dex{% if result.app.signed %} · signed {{ result.app.signed }}{% endif %}</p>
+
+  <div class="score {{ score_class }}">
+    <b>{{ "%g"|format(result.score) }}</b><span>/ 100</span>
+    <span class="verdict">{{ result.verdict }}</span>
+    <span style="margin-left:auto" class="mono">
+      {%- for name, count in result.summary.items() %}{% if count %}{{ name }} {{ count }}&nbsp;&nbsp;{% endif %}{% endfor -%}
+    </span>
+  </div>
+
+  {% for warning in result.warnings %}<div class="warn">{{ warning }}</div>{% endfor %}
+
+  <h2>Capabilities</h2>
+  {% if not result.capabilities %}<p class="sub">No capabilities matched.</p>{% endif %}
+  {% for cap in result.capabilities %}
+  <article class="cap {{ cap.severity.value }}">
+    <header>
+      <span class="rid mono">{{ cap.rule_id }}</span>
+      <span>{{ cap.name }}</span>
+      <span class="sev">{{ cap.severity.value }}</span>
+      {% for t in cap.attack %}<span class="chip">{{ t }} {{ attack_name(t) }}</span>{% endfor %}
+    </header>
+    {% if cap.description %}<p class="desc">{{ cap.description }}</p>{% endif %}
+    {% for match in cap.matches[:6] %}
+    <div class="site">
+      <div class="loc mono">{{ match.location }}</div>
+      {% set path = match.best_path %}
+      {% if path %}
+      <div class="reach mono">reachable from &lt;{{ path.entry.kind.value }}&gt; {{ path.entry.method }} ({{ path.hops }} hop{{ 's' if path.hops != 1 else '' }})</div>
+        {% if path.hops %}
+        <div class="path mono">{{ path.methods | join(" → ") }}</div>
+        {% endif %}
+      {% elif match.reachable is false %}
+      <div class="path">no entry-point path found (dead code, reflection, or packed)</div>
+      {% endif %}
+      {% for e in match.evidence %}
+      <div class="ev mono"><span>{{ e.kind }}</span>{{ e.value }}{% if e.offset is not none %} @ 0x{{ "%x"|format(e.offset) }}{% endif %}</div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    {% if cap.matches | length > 6 %}<p class="sub">… {{ cap.matches | length - 6 }} more site(s)</p>{% endif %}
+    <p class="sub">score +{{ "%g"|format(cap.score_contribution) }} — {{ cap.score_reason }}</p>
+  </article>
+  {% endfor %}
+
+  <h2>Entry points ({{ result.entry_points | length }})</h2>
+  <table>
+    <thead><tr><th>kind</th><th>class</th></tr></thead>
+    <tbody>
+    {% for entry in result.entry_points[:60] %}
+      <tr><td class="mono">{{ entry.kind.value }}</td><td class="mono">{{ entry.method }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {% if result.app.permissions %}
+  <h2>Permissions ({{ result.app.permissions | length }})</h2>
+  <div class="chips">{% for p in result.app.permissions %}<span class="chip mono">{{ p }}</span>{% endfor %}</div>
+  {% endif %}
+
+  <footer>
+    tadori {{ version }} · {{ result.rules_evaluated }} rules · {{ "%.1f"|format(result.duration_sec) }}s ·
+    scanned {{ result.scanned_at }}<br>
+    Capability risk score — not a malware verdict. Review the evidence and call paths before acting.
+  </footer>
+</main>
+</body>
+</html>

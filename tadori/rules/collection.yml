@@ -1,0 +1,131 @@
+# Collection of user and device data.
+---
+rule:
+  meta:
+    id: TAD-COLL-0001
+    name: capture the screen
+    scope: method
+    severity: high
+    attack: [T1513]
+    description: >
+      Starts a MediaProjection capture or a virtual display. The remote-viewing
+      half of a device-takeover toolkit.
+    references:
+      - https://attack.mitre.org/techniques/T1513/
+  features:
+    - or:
+        - api: "Landroid/media/projection/MediaProjectionManager;->createScreenCaptureIntent"
+        - api: "Landroid/media/projection/MediaProjection;->createVirtualDisplay"
+        - api: "Landroid/hardware/display/DisplayManager;->createVirtualDisplay"
+        - api: "Landroid/accessibilityservice/AccessibilityService;->takeScreenshot"
+---
+rule:
+  meta:
+    id: TAD-COLL-0002
+    name: record audio from the microphone
+    scope: method
+    severity: high
+    attack: [T1429]
+    description: Records audio in the background.
+    references:
+      - https://attack.mitre.org/techniques/T1429/
+  features:
+    - or:
+        - api: "Landroid/media/MediaRecorder;->setAudioSource"
+        - api: "Landroid/media/AudioRecord;-><init>"
+    - permission: android.permission.RECORD_AUDIO
+---
+rule:
+  meta:
+    id: TAD-COLL-0003
+    name: read the contact list
+    scope: method
+    severity: medium
+    attack: [T1636.003]
+    description: Reads contacts, typically to spread by SMS or to build target lists.
+    references:
+      - https://attack.mitre.org/techniques/T1636/003/
+  features:
+    - or:
+        - substring: "content://com.android.contacts"
+        - type: "Landroid/provider/ContactsContract"
+        - type: "Landroid/provider/ContactsContract$CommonDataKinds$Phone"
+    - permission: android.permission.READ_CONTACTS
+---
+rule:
+  meta:
+    id: TAD-COLL-0004
+    name: read the call log
+    scope: method
+    severity: medium
+    attack: [T1636.002]
+    description: Reads call history.
+    references:
+      - https://attack.mitre.org/techniques/T1636/002/
+  features:
+    - or:
+        - substring: "content://call_log"
+        - type: "Landroid/provider/CallLog$Calls"
+    - permission: android.permission.READ_CALL_LOG
+---
+rule:
+  meta:
+    id: TAD-COLL-0005
+    name: track device location
+    scope: method
+    severity: medium
+    attack: [T1430]
+    description: Requests location updates or the last known position.
+    references:
+      - https://attack.mitre.org/techniques/T1430/
+  features:
+    - or:
+        - api: "Landroid/location/LocationManager;->requestLocationUpdates"
+        - api: "Landroid/location/LocationManager;->getLastKnownLocation"
+        - api: "Lcom/google/android/gms/location/FusedLocationProviderClient;->getLastLocation"
+    - or:
+        - permission: android.permission.ACCESS_FINE_LOCATION
+        - permission: android.permission.ACCESS_COARSE_LOCATION
+---
+rule:
+  meta:
+    id: TAD-COLL-0006
+    name: enumerate installed applications
+    scope: method
+    severity: low
+    attack: [T1418]
+    description: >
+      Lists installed packages — reconnaissance for target selection, and for
+      checking whether security software is present.
+    references:
+      - https://attack.mitre.org/techniques/T1418/
+  features:
+    - or:
+        - api: "Landroid/content/pm/PackageManager;->getInstalledPackages"
+        - api: "Landroid/content/pm/PackageManager;->getInstalledApplications"
+        - api: "Landroid/content/pm/PackageManager;->queryIntentActivities"
+    - or:
+        - permission: android.permission.QUERY_ALL_PACKAGES
+        - count:
+            api: "Landroid/content/pm/PackageManager;->getInstalledPackages"
+            value: ">=1"
+---
+rule:
+  meta:
+    id: TAD-COLL-0007
+    name: collect device identifiers
+    scope: method
+    severity: low
+    attack: [T1426]
+    description: >
+      Reads IMEI / subscriber id / serial. Bot registration fingerprints, and
+      also plain ad-tech behaviour — context matters.
+    references:
+      - https://attack.mitre.org/techniques/T1426/
+  features:
+    - or:
+        - api: "Landroid/telephony/TelephonyManager;->getDeviceId"
+        - api: "Landroid/telephony/TelephonyManager;->getSubscriberId"
+        - api: "Landroid/telephony/TelephonyManager;->getSimSerialNumber"
+        - api: "Landroid/telephony/TelephonyManager;->getLine1Number"
+        - field: "Landroid/os/Build;->SERIAL"

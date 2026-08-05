@@ -1,0 +1,95 @@
+# Command and control, and exfiltration channels.
+---
+rule:
+  meta:
+    id: TAD-C2-0001
+    name: Telegram Bot API used as a command channel
+    scope: method
+    severity: high
+    attack: [T1481, T1437.001]
+    description: >
+      Talks to the Telegram Bot API. A free, TLS-protected, attribution-light C2
+      that needs no infrastructure of its own.
+    references:
+      - https://attack.mitre.org/techniques/T1481/
+  features:
+    - substring: "api.telegram.org"
+---
+rule:
+  meta:
+    id: TAD-C2-0002
+    name: Firebase used as a command channel
+    scope: method
+    severity: medium
+    attack: [T1481.002, T1437.001]
+    description: >
+      Receives push messages or reads a realtime database. Common in benign apps,
+      so weigh it together with what the handler does.
+    references:
+      - https://attack.mitre.org/techniques/T1481/002/
+  features:
+    - or:
+        - method: "/->onMessageReceived\\(/"
+        - substring: "firebaseio.com"
+        - substring: "firebasedatabase.app"
+---
+rule:
+  meta:
+    id: TAD-C2-0003
+    name: hardcoded raw-IP endpoint
+    scope: method
+    severity: medium
+    attack: [T1437.001, T1509]
+    description: >
+      Builds a URL against a literal IP address rather than a hostname —
+      typical of throwaway C2 hosts, unusual in production apps.
+    references:
+      - https://attack.mitre.org/techniques/T1437/001/
+  features:
+    # Loopback and RFC1918 addresses are development and LAN traffic, not C2.
+    - regex: "/^https?:\\/\\/(?!127\\.|0\\.0\\.0\\.0|10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.)(\\d{1,3}\\.){3}\\d{1,3}(:\\d+)?(\\/|$)/"
+---
+rule:
+  meta:
+    id: TAD-C2-0004
+    name: raw socket to a hardcoded host and port
+    scope: class
+    severity: medium
+    attack: [T1509, T1646]
+    description: >
+      Opens a TCP socket directly instead of going through HTTP. Used by
+      remote-access modules for screen streaming and interactive control.
+    references:
+      - https://attack.mitre.org/techniques/T1509/
+  features:
+    - or:
+        - api: "Ljava/net/Socket;-><init>"
+        - api: "Ljava/nio/channels/SocketChannel;->open"
+    - or:
+        - api: "Ljava/io/DataOutputStream;->write"
+        - api: "Ljava/io/OutputStream;->write"
+        - api: "Ljava/net/Socket;->getOutputStream"
+---
+rule:
+  meta:
+    id: TAD-C2-0005
+    name: exfiltrate collected data over HTTP
+    scope: class
+    severity: medium
+    attack: [T1646, T1639]
+    description: >
+      Collects device or user data in the same class that posts a request body,
+      the minimal shape of an exfiltration routine.
+    references:
+      - https://attack.mitre.org/techniques/T1646/
+  features:
+    - or:
+        - api: "Ljava/net/HttpURLConnection;->setRequestMethod"
+        - api: "Ljava/net/URL;->openConnection"
+        - api: "Lokhttp3/OkHttpClient;->newCall"
+    - or:
+        - api: "Landroid/telephony/TelephonyManager;->getDeviceId"
+        - api: "Landroid/telephony/TelephonyManager;->getSubscriberId"
+        - api: "Landroid/telephony/TelephonyManager;->getLine1Number"
+        - api: "Landroid/accounts/AccountManager;->getAccounts"
+        - field: "Landroid/os/Build;->SERIAL"

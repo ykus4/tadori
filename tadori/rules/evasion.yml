@@ -1,0 +1,157 @@
+# Analysis evasion and defense impairment.
+---
+rule:
+  meta:
+    id: TAD-EVAS-0001
+    name: detect an emulator or analysis environment
+    scope: class
+    severity: medium
+    attack: [T1633.001]
+    description: >
+      Compares build properties against emulator fingerprints so the payload can
+      stay dormant in a sandbox. Also used defensively by anti-fraud SDKs.
+    references:
+      - https://attack.mitre.org/techniques/T1633/001/
+  features:
+    - n_of:
+        n: 2
+        of:
+          - substring: "generic"
+          - substring: "goldfish"
+          - substring: "ranchu"
+          - substring: "sdk_gphone"
+          - substring: "vbox"
+          - substring: "qemu"
+          - substring: "/dev/socket/genyd"
+          - field: "Landroid/os/Build;->FINGERPRINT"
+          - field: "Landroid/os/Build;->PRODUCT"
+          - field: "Landroid/os/Build;->HARDWARE"
+---
+rule:
+  meta:
+    id: TAD-EVAS-0002
+    name: detect root or a custom ROM
+    scope: class
+    severity: medium
+    attack: [T1633.001, T1630.003]
+    description: >
+      Looks for su binaries, test-keys builds or Magisk artefacts.
+    references:
+      - https://attack.mitre.org/techniques/T1633/001/
+  features:
+    - n_of:
+        n: 2
+        of:
+          - substring: "/system/xbin/su"
+          - substring: "/system/bin/su"
+          - substring: "/sbin/su"
+          - substring: "test-keys"
+          - substring: "magisk"
+          - substring: "supersu"
+          - substring: "busybox"
+          - field: "Landroid/os/Build;->TAGS"
+---
+rule:
+  meta:
+    id: TAD-EVAS-0003
+    name: detect instrumentation frameworks
+    scope: class
+    severity: medium
+    attack: [T1633, T1617]
+    description: >
+      Hunts for Frida, Xposed or ptrace attachment — the payload wants to know
+      whether it is being hooked.
+    references:
+      - https://attack.mitre.org/techniques/T1633/
+  features:
+    - n_of:
+        n: 2
+        of:
+          - substring: "frida"
+          - substring: "gum-js-loop"
+          - substring: "xposed"
+          - substring: "de.robv.android.xposed"
+          - substring: "/proc/self/maps"
+          - substring: "TracerPid"
+          - api: "Landroid/os/Debug;->isDebuggerConnected"
+---
+rule:
+  meta:
+    id: TAD-EVAS-0004
+    name: disable an installed component (possible icon hiding)
+    scope: method
+    severity: medium
+    attack: [T1628.001]
+    description: >
+      Toggles a component's enabled state. Hiding the launcher alias is the
+      malicious use; app stores and WorkManager also do it legitimately, so
+      check which component is being disabled before drawing a conclusion.
+    references:
+      - https://attack.mitre.org/techniques/T1628/001/
+  features:
+    - api: "Landroid/content/pm/PackageManager;->setComponentEnabledSetting"
+---
+rule:
+  meta:
+    id: TAD-EVAS-0005
+    name: resist removal through device administration
+    scope: method
+    severity: high
+    attack: [T1629.001, T1626.001]
+    description: >
+      Uses device-admin powers to lock the screen, wipe, or make uninstall
+      impossible without first revoking admin rights.
+    references:
+      - https://attack.mitre.org/techniques/T1629/001/
+  features:
+    - or:
+        - api: "Landroid/app/admin/DevicePolicyManager;->lockNow"
+        - api: "Landroid/app/admin/DevicePolicyManager;->resetPassword"
+        - api: "Landroid/app/admin/DevicePolicyManager;->wipeData"
+        - api: "Landroid/app/admin/DevicePolicyManager;->addUserRestriction"
+        - api: "Landroid/app/admin/DevicePolicyManager;->isAdminActive"
+    - or:
+        - permission: android.permission.BIND_DEVICE_ADMIN
+        - component: "receiver:device_admin"
+        - string: android.app.action.ADD_DEVICE_ADMIN
+---
+rule:
+  meta:
+    id: TAD-EVAS-0006
+    name: uninstall or disable another application
+    scope: method
+    severity: medium
+    attack: [T1629.003, T1630.001]
+    description: >
+      Triggers removal of another package — used against security apps, and to
+      clean up a dropper after the payload lands.
+    references:
+      - https://attack.mitre.org/techniques/T1629/003/
+  features:
+    - or:
+        - string: android.intent.action.DELETE
+        - string: android.intent.action.UNINSTALL_PACKAGE
+        - api: "Landroid/content/pm/PackageInstaller;->uninstall"
+---
+rule:
+  meta:
+    id: TAD-EVAS-0007
+    name: ship a packer runtime
+    scope: apk
+    severity: medium
+    attack: [T1406.002]
+    description: >
+      Bundles a known commercial packer's runtime library. The real code is
+      unpacked at runtime, so static coverage of this APK is limited.
+    references:
+      - https://attack.mitre.org/techniques/T1406/002/
+  features:
+    - or:
+        - native_lib: "*libjiagu*"
+        - native_lib: "*libDexHelper*"
+        - native_lib: "*libsecexe*"
+        - native_lib: "*libtup.so"
+        - native_lib: "*libprotectClass*"
+        - native_lib: "*libmobisec*"
+        - native_lib: "*libnesec*"
+        - native_lib: "*libAPKProtect*"

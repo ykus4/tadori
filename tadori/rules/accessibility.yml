@@ -1,0 +1,100 @@
+# Accessibility abuse — the backbone of 2025-26 Android banking trojans
+# (on-device ATS fraud: OverlayPhantom, ToxicPanda, RatOn, Albiriox).
+---
+rule:
+  meta:
+    id: TAD-ACCS-0001
+    name: drive the UI through an accessibility service
+    scope: method
+    severity: high
+    attack: [T1516, T1453]
+    description: >
+      Performs gestures, global actions or node actions from an accessibility
+      service. This is how on-device fraud automates a real banking app: the
+      malware, not the user, taps the buttons.
+    references:
+      - https://attack.mitre.org/techniques/T1516/
+      - https://developer.android.com/reference/android/accessibilityservice/AccessibilityService
+  features:
+    - or:
+        - api: "Landroid/accessibilityservice/AccessibilityService;->performGlobalAction"
+        - api: "Landroid/accessibilityservice/AccessibilityService;->dispatchGesture"
+        - api: "Landroid/view/accessibility/AccessibilityNodeInfo;->performAction"
+    - or:
+        - permission: android.permission.BIND_ACCESSIBILITY_SERVICE
+        - component: "service:accessibility_service"
+        - metadata: android.accessibilityservice
+  reachable_from:
+    entrypoint: [accessibility_service, callback, service, exported_service]
+    max_hops: 8
+---
+rule:
+  meta:
+    id: TAD-ACCS-0002
+    name: read on-screen content from accessibility events
+    scope: method
+    severity: high
+    attack: [T1417.002, T1453]
+    description: >
+      Harvests text from the accessibility node tree or event stream. Used to
+      scrape balances, one-time codes and credentials out of other apps'
+      windows without any permission held by the victim app.
+    references:
+      - https://attack.mitre.org/techniques/T1417/002/
+  features:
+    - or:
+        - api: "Landroid/view/accessibility/AccessibilityNodeInfo;->getText"
+        - api: "Landroid/view/accessibility/AccessibilityEvent;->getText"
+        - api: "Landroid/view/accessibility/AccessibilityNodeInfo;->findAccessibilityNodeInfosByViewId"
+        - api: "Landroid/view/accessibility/AccessibilityNodeInfo;->findAccessibilityNodeInfosByText"
+    - or:
+        - permission: android.permission.BIND_ACCESSIBILITY_SERVICE
+        - component: "service:accessibility_service"
+        - method: "/->onAccessibilityEvent\\(/"
+  reachable_from:
+    entrypoint: [accessibility_service, callback, service, exported_service]
+    max_hops: 8
+---
+rule:
+  meta:
+    id: TAD-ACCS-0003
+    name: track which app is in the foreground
+    scope: method
+    severity: medium
+    attack: [T1424, T1418]
+    description: >
+      Watches the foreground package, the trigger an overlay or ATS module needs
+      in order to fire only when a targeted banking app is open.
+    references:
+      - https://attack.mitre.org/techniques/T1424/
+  features:
+    - or:
+        - api: "Landroid/app/usage/UsageStatsManager;->queryEvents"
+        - api: "Landroid/app/usage/UsageStatsManager;->queryUsageStats"
+        - api: "Landroid/app/ActivityManager;->getRunningAppProcesses"
+        - api: "Landroid/app/ActivityManager;->getRunningTasks"
+        - and:
+            - api: "Landroid/view/accessibility/AccessibilityEvent;->getPackageName"
+            - method: "/->onAccessibilityEvent\\(/"
+---
+rule:
+  meta:
+    id: TAD-ACCS-0004
+    name: keylogging through accessibility or an input method
+    scope: method
+    severity: high
+    attack: [T1417.001]
+    description: >
+      Observes key events from a service the user granted input access to —
+      an accessibility service, or a custom keyboard bound as an input method.
+    references:
+      - https://attack.mitre.org/techniques/T1417/001/
+  features:
+    - or:
+        - method: "/->onKeyEvent\\(/"
+        - api: "Landroid/view/accessibility/AccessibilityEvent;->getEventType"
+    - or:
+        - component: "service:input_method"
+        - component: "service:accessibility_service"
+        - permission: android.permission.BIND_INPUT_METHOD
+        - permission: android.permission.BIND_ACCESSIBILITY_SERVICE

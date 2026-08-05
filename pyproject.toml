@@ -1,0 +1,66 @@
+[project]
+name = "tadori"
+version = "0.1.0"
+description = "Entry-point-aware capability detection for Android APKs — YAML rules matched on the DEX call graph, mapped to MITRE ATT&CK Mobile"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "ykus4" }]
+keywords = [
+    "android",
+    "apk",
+    "dex",
+    "malware",
+    "capability",
+    "static-analysis",
+    "mitre-attack",
+    "reverse-engineering",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+dependencies = [
+    "androguard>=4.1.3",
+    "click>=8.3.3",
+    "jinja2>=3.1.6",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ykus4/tadori"
+Documentation = "https://ykus4.github.io/tadori"
+Issues = "https://github.com/ykus4/tadori/issues"
+
+[project.scripts]
+tadori = "tadori.cli:cli"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.12",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tadori"]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

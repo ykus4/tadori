@@ -1,0 +1,115 @@
+# Droppers and second-stage loading.
+---
+rule:
+  meta:
+    id: TAD-DROP-0001
+    name: install another APK through the package installer
+    scope: method
+    severity: high
+    attack: [T1544, T1407]
+    description: >
+      Drives PackageInstaller sessions or an install intent. Session-based
+      installs are the current dropper technique of choice, because the payload
+      never has to pass Play review.
+    references:
+      - https://attack.mitre.org/techniques/T1544/
+  features:
+    # The session APIs alone are enough; the install intent and the APK mime
+    # type are only meaningful together with the install permission, otherwise
+    # every app that merely shares an APK file would match.
+    - or:
+        - api: "Landroid/content/pm/PackageInstaller;->createSession"
+        - api: "Landroid/content/pm/PackageInstaller;->openSession"
+        - api: "Landroid/content/pm/PackageInstaller$Session;->commit"
+        - and:
+            - or:
+                - string: application/vnd.android.package-archive
+                - string: android.intent.action.INSTALL_PACKAGE
+            - permission: android.permission.REQUEST_INSTALL_PACKAGES
+---
+rule:
+  meta:
+    id: TAD-DROP-0002
+    name: load DEX or JAR code at runtime
+    scope: method
+    severity: high
+    attack: [T1407]
+    description: >
+      Constructs a class loader over code that is not part of the reviewed APK.
+      Everything the loaded payload does is invisible to a scan of this file.
+    references:
+      - https://attack.mitre.org/techniques/T1407/
+  features:
+    - or:
+        - api: "Ldalvik/system/DexClassLoader;-><init>"
+        - api: "Ldalvik/system/PathClassLoader;-><init>"
+        - api: "Ldalvik/system/InMemoryDexClassLoader;-><init>"
+        - api: "Ldalvik/system/BaseDexClassLoader;-><init>"
+        - api: "Ldalvik/system/DexFile;->loadDex"
+---
+rule:
+  meta:
+    id: TAD-DROP-0003
+    name: decrypt a bundled payload before loading it
+    scope: class
+    severity: high
+    attack: [T1406, T1407]
+    description: >
+      One class both decrypts data and hands it to a class loader — the shape of
+      a packed second stage carried inside assets or raw resources.
+    references:
+      - https://attack.mitre.org/techniques/T1406/
+  features:
+    - or:
+        - api: "Ljavax/crypto/Cipher;->doFinal"
+        - api: "Ljavax/crypto/CipherInputStream;-><init>"
+    - or:
+        - api: "Ldalvik/system/DexClassLoader;-><init>"
+        - api: "Ldalvik/system/InMemoryDexClassLoader;-><init>"
+        - api: "Ldalvik/system/BaseDexClassLoader;-><init>"
+    - or:
+        - api: "Landroid/content/res/AssetManager;->open"
+        - api: "Ljava/io/FileOutputStream;-><init>"
+---
+rule:
+  meta:
+    id: TAD-DROP-0004
+    name: drop a file and execute it as a process
+    scope: class
+    severity: high
+    attack: [T1623.001]
+    description: >
+      Writes a file, marks it executable, and runs a shell or process. A native
+      payload staged at runtime, bypassing the DEX entirely.
+    references:
+      - https://attack.mitre.org/techniques/T1623/001/
+  features:
+    - or:
+        - api: "Ljava/lang/Runtime;->exec"
+        - api: "Ljava/lang/ProcessBuilder;->start"
+    - or:
+        - api: "Ljava/io/File;->setExecutable"
+        - api: "Ljava/io/FileOutputStream;-><init>"
+        - string: "chmod"
+---
+rule:
+  meta:
+    id: TAD-DROP-0005
+    name: invoke hidden APIs by reflection
+    scope: method
+    severity: low
+    attack: [T1406, T1575]
+    description: >
+      Resolves classes and methods by name at runtime. Legitimate in
+      compatibility shims, but it is also how rules that key on direct API
+      references are dodged — treat reflection-heavy code as opaque.
+    references:
+      - https://attack.mitre.org/techniques/T1406/
+  features:
+    - api: "Ljava/lang/reflect/Method;->invoke"
+    - or:
+        - count:
+            api: "Ljava/lang/Class;->forName"
+            value: ">=2"
+        - api: "Ljava/lang/Class;->getDeclaredMethod"
+        - api: "Ljava/lang/reflect/Method;->setAccessible"

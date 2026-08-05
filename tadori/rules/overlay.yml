@@ -1,0 +1,60 @@
+# Overlay / phishing surfaces.
+---
+rule:
+  meta:
+    id: TAD-OVER-0001
+    name: draw a window on top of other apps
+    scope: method
+    severity: high
+    attack: [T1660, T1417.002]
+    description: >
+      Adds a system-level overlay window. Combined with foreground-app tracking
+      this is the classic credential-phishing primitive: a fake login drawn over
+      the real banking app.
+    references:
+      - https://attack.mitre.org/techniques/T1660/
+  features:
+    - or:
+        - api: "Landroid/view/WindowManager;->addView"
+        - api: "Landroid/view/WindowManagerImpl;->addView"
+    - or:
+        - permission: android.permission.SYSTEM_ALERT_WINDOW
+        - api: "Landroid/provider/Settings;->canDrawOverlays"
+        - string: android.settings.action.MANAGE_OVERLAY_PERMISSION
+---
+rule:
+  meta:
+    id: TAD-OVER-0002
+    name: request the overlay permission at runtime
+    scope: method
+    severity: medium
+    attack: [T1660]
+    description: >
+      Walks the user into the "display over other apps" settings screen. Benign
+      apps do this too (floating players, chat heads); treat it as context for
+      the overlay capability rather than a finding on its own.
+    references:
+      - https://developer.android.com/reference/android/provider/Settings#ACTION_MANAGE_OVERLAY_PERMISSION
+  features:
+    - or:
+        - string: android.settings.action.MANAGE_OVERLAY_PERMISSION
+        - api: "Landroid/provider/Settings;->canDrawOverlays"
+---
+rule:
+  meta:
+    id: TAD-OVER-0003
+    name: phishing WebView reachable from a JavaScript bridge
+    scope: method
+    severity: medium
+    attack: [T1660, T1658]
+    description: >
+      Loads remote content into a WebView that exposes app methods to
+      JavaScript. Server-controlled script can then call into the app.
+    references:
+      - https://developer.android.com/reference/android/webkit/WebView#addJavascriptInterface(java.lang.Object,%20java.lang.String)
+  features:
+    - api: "Landroid/webkit/WebView;->addJavascriptInterface"
+    - or:
+        - api: "Landroid/webkit/WebView;->loadUrl"
+        - api: "Landroid/webkit/WebView;->loadData"
+        - api: "Landroid/webkit/WebSettings;->setJavaScriptEnabled"

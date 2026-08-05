@@ -1,0 +1,98 @@
+# Persistence and execution triggers.
+---
+rule:
+  meta:
+    id: TAD-PERS-0001
+    name: start automatically after boot
+    scope: apk
+    severity: low
+    attack: [T1398, T1624.001]
+    description: >
+      Registers a receiver for BOOT_COMPLETED. Ubiquitous in benign apps; useful
+      as context for a payload that must survive reboots.
+    references:
+      - https://attack.mitre.org/techniques/T1398/
+  features:
+    - or:
+        - intent_action: android.intent.action.BOOT_COMPLETED
+        - intent_action: android.intent.action.QUICKBOOT_POWERON
+---
+rule:
+  meta:
+    id: TAD-PERS-0002
+    name: keep running as a foreground service
+    scope: method
+    severity: low
+    attack: [T1541]
+    description: >
+      Promotes a service to the foreground so Android will not kill it. Legitimate
+      for players and trackers; also how a takeover module stays alive.
+    references:
+      - https://attack.mitre.org/techniques/T1541/
+  features:
+    - or:
+        - api: "Landroid/app/Service;->startForeground"
+        - api: "Landroid/app/NotificationManager;->notify"
+    - or:
+        - permission: android.permission.FOREGROUND_SERVICE
+        - api: "Landroid/app/Service;->startForeground"
+---
+rule:
+  meta:
+    id: TAD-PERS-0003
+    name: schedule repeated background work
+    scope: method
+    severity: low
+    attack: [T1603]
+    description: >
+      Uses JobScheduler, WorkManager or AlarmManager to get periodic execution.
+    references:
+      - https://attack.mitre.org/techniques/T1603/
+  features:
+    - or:
+        - api: "Landroid/app/job/JobScheduler;->schedule"
+        - api: "Landroid/app/AlarmManager;->setRepeating"
+        - api: "Landroid/app/AlarmManager;->setInexactRepeating"
+        - api: "Landroidx/work/WorkManager;->enqueue"
+        - api: "Landroidx/work/WorkManager;->enqueueUniquePeriodicWork"
+---
+rule:
+  meta:
+    id: TAD-PERS-0004
+    name: wake on a screen or connectivity event
+    scope: apk
+    severity: info
+    attack: [T1624.001]
+    description: >
+      Listens for system broadcasts that provide a heartbeat — screen on/off,
+      connectivity changes, package installs.
+    references:
+      - https://attack.mitre.org/techniques/T1624/001/
+  features:
+    - n_of:
+        n: 2
+        of:
+          - intent_action: android.intent.action.SCREEN_ON
+          - intent_action: android.intent.action.SCREEN_OFF
+          - intent_action: android.intent.action.USER_PRESENT
+          - intent_action: android.net.conn.CONNECTIVITY_CHANGE
+          - intent_action: android.intent.action.PACKAGE_ADDED
+          - intent_action: android.intent.action.PACKAGE_REPLACED
+---
+rule:
+  meta:
+    id: TAD-NAT-0001
+    name: load a native library
+    scope: method
+    severity: info
+    attack: [T1575]
+    description: >
+      Calls into native code. Not suspicious by itself, but it marks the point
+      where DEX-level analysis stops seeing what the app does.
+    references:
+      - https://attack.mitre.org/techniques/T1575/
+  features:
+    - or:
+        - api: "Ljava/lang/System;->loadLibrary"
+        - api: "Ljava/lang/System;->load"
+        - api: "Ljava/lang/Runtime;->loadLibrary"
