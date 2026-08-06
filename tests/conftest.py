@@ -7,7 +7,7 @@ A real-APK integration test runs only when ``TADORI_TEST_APK`` points at one.
 from __future__ import annotations
 
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -55,16 +55,9 @@ def index_from_edges(
 ) -> AppIndex:
     """Build an AppIndex from ``caller -> [callees]`` edges."""
     index = AppIndex()
-    index.callers = defaultdict(set)
-    index.methods_by_class = defaultdict(list)
-
     refs = set(edges) | {callee for callees in edges.values() for callee in callees}
     for ref in sorted(refs):
-        cls = ref.split("->", 1)[0]
-        index.internal_refs.add(ref)
-        index.internal_classes.add(cls)
-        index.methods_by_class[cls].append(ref)
-        index.signature_counts[ref.partition("->")[2]] += 1
+        index.record_method(ref)
     for caller, callees in edges.items():
         for callee in callees:
             index.callers[callee].add(caller)

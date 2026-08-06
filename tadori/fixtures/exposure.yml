@@ -1,0 +1,78 @@
+# Fixtures for tadori/rules/exposure.yml.
+---
+fixture:
+  name: a provider exported with no permission at all
+  rule: TAD-EXPO-0001
+  expect: match
+  app:
+    components:
+      - {type: provider, name: com.x.FilesProvider, exported: true}
+---
+fixture:
+  name: an exported provider behind a permission is not the finding
+  rule: TAD-EXPO-0001
+  expect: no-match
+  app:
+    components:
+      - type: provider
+        name: com.x.FilesProvider
+        exported: true
+        permission: com.x.permission.READ_FILES
+---
+fixture:
+  name: an unexported provider is not exposed
+  rule: TAD-EXPO-0001
+  expect: no-match
+  app:
+    components:
+      - {type: provider, name: com.x.FilesProvider, exported: false}
+---
+fixture:
+  name: an unprotected exported activity is not a provider finding
+  rule: TAD-EXPO-0001
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+---
+fixture:
+  name: debuggable release build
+  rule: TAD-EXPO-0002
+  expect: match
+  app:
+    flags: {debuggable: true}
+---
+fixture:
+  name: debuggable explicitly disabled
+  rule: TAD-EXPO-0002
+  expect: no-match
+  app:
+    flags: {debuggable: false, allowBackup: true}
+---
+fixture:
+  name: backups allowed
+  rule: TAD-EXPO-0003
+  expect: match
+  app:
+    flags: {allowBackup: true}
+---
+fixture:
+  name: backups turned off
+  rule: TAD-EXPO-0003
+  expect: no-match
+  app:
+    flags: {allowBackup: false}
+---
+fixture:
+  name: cleartext traffic re-enabled app-wide
+  rule: TAD-EXPO-0004
+  expect: match
+  app:
+    flags: {usesCleartextTraffic: true, networkSecurityConfig: "@xml/net"}
+---
+fixture:
+  name: cleartext traffic left blocked
+  rule: TAD-EXPO-0004
+  expect: no-match
+  app:
+    flags: {usesCleartextTraffic: false}

@@ -74,15 +74,20 @@ class Vocabulary:
         return self._set(kind).matches(value)
 
     def _set(self, kind: str) -> PatternSet:
-        if kind == "api":
-            return self.api
-        if kind == "string":
-            return self.string
-        if kind == "field":
-            return self.field_
-        if kind == "type":
-            return self.type
-        raise KeyError(f"unknown feature kind: {kind}")
+        # Called once per constant in the walk, so keep it a dict lookup.
+        try:
+            return getattr(self, _VOCAB_ATTRIBUTES[kind])
+        except KeyError:
+            raise KeyError(f"unknown feature kind: {kind}") from None
+
+
+#: ``field`` is spelled ``field_`` on Vocabulary; the rest match their kind.
+_VOCAB_ATTRIBUTES = {
+    "api": "api",
+    "string": "string",
+    "field": "field_",
+    "type": "type",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +142,21 @@ class AppIndex:
     js_bridge_classes: set[str] = field(default_factory=set)
     method_count: int = 0
     truncated: bool = False
+
+    def record_method(self, ref: str) -> str:
+        """Register one of the app's own methods; returns the interned ref.
+
+        Both the DEX walk and the fixture builder go through here, so the
+        bookkeeping reachability depends on — the class map and the signature
+        counts behind the polymorphic cut — cannot drift between them.
+        """
+        ref = sys.intern(ref)
+        class_name = ref_class(ref)
+        self.internal_refs.add(ref)
+        self.internal_classes.add(class_name)
+        self.methods_by_class[class_name].append(ref)
+        self.signature_counts[ref.partition("->")[2]] += 1
+        return ref
 
     def features_of(self, ref: str) -> MethodFeatures:
         return self.features.get(ref) or MethodFeatures.empty()
@@ -200,11 +220,9 @@ def build_index(
 def _map_classes(analysis: Any, methods: list[Any], index: AppIndex) -> None:
     """Record the app's own methods, classes and class hierarchy."""
     for method in methods:
-        ref = sys.intern(method_ref(method.class_name, method.name, method.descriptor))
-        index.internal_refs.add(ref)
-        index.internal_classes.add(method.class_name)
-        index.methods_by_class[method.class_name].append(ref)
-        index.signature_counts[ref.partition("->")[2]] += 1
+        index.record_method(
+            method_ref(method.class_name, method.name, method.descriptor)
+        )
     index.method_count = len(index.internal_refs)
 
     for klass in analysis.get_classes():

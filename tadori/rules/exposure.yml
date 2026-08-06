@@ -1,0 +1,80 @@
+# Attack surface declared in the manifest rather than written in code.
+#
+# These rules answer the other half of tadori's question: not "what can this app
+# do?" but "what can another app on the device do *to* it?". They match manifest
+# facts, so their scope is `apk` and they carry no call chain — the manifest
+# either says this or it does not.
+---
+rule:
+  meta:
+    id: TAD-EXPO-0001
+    name: content provider exported without a permission
+    scope: apk
+    severity: medium
+    attack: [T1409, T1428]
+    description: >
+      A provider any other app on the device can query, with no permission
+      guarding it. Providers hand out app data — files, databases, session
+      state — so an unprotected one is a read (and often write) primitive for
+      anything else installed. Note that providers default to exported below
+      targetSdk 17, which is where most of these come from.
+    references:
+      - https://developer.android.com/guide/topics/manifest/provider-element#exported
+      - https://developer.android.com/privacy-and-security/security-tips#content-providers
+  features:
+    - exported: "provider:unprotected"
+---
+rule:
+  meta:
+    id: TAD-EXPO-0002
+    name: shipped with android:debuggable
+    scope: apk
+    severity: medium
+    attack: [T1404]
+    description: >
+      The application element declares debuggable="true", so any local process
+      that can reach the JDWP socket can attach to it, run code as the app and
+      read its private data. A release build should never carry this; on a
+      sample it usually means the APK was assembled quickly rather than by a
+      release pipeline.
+    references:
+      - https://developer.android.com/guide/topics/manifest/application-element#debug
+      - https://developer.android.com/privacy-and-security/risks/android-debuggable
+  features:
+    - manifest: "debuggable=true"
+---
+rule:
+  meta:
+    id: TAD-EXPO-0003
+    name: private data included in device backups
+    scope: apk
+    severity: low
+    attack: [T1409]
+    description: >
+      allowBackup="true" lets the app's private storage leave the device through
+      adb backup or the cloud backup transport, without the app being involved.
+      This is the platform default below targetSdk 31, so it is context rather
+      than a finding — but it decides whether tokens and databases are copyable
+      off a device someone has briefly borrowed.
+    references:
+      - https://developer.android.com/guide/topics/manifest/application-element#allowbackup
+  features:
+    - manifest: "allowBackup=true"
+---
+rule:
+  meta:
+    id: TAD-EXPO-0004
+    name: cleartext HTTP traffic permitted
+    scope: apk
+    severity: low
+    attack: [T1638, T1639.001]
+    description: >
+      usesCleartextTraffic="true" re-enables plain HTTP for the whole app on
+      targetSdk 28 and above, where the platform otherwise blocks it. Anything
+      the app sends can then be read and rewritten by whoever runs the network.
+      A network security config may still narrow this per domain.
+    references:
+      - https://developer.android.com/privacy-and-security/risks/cleartext-communications
+      - https://developer.android.com/training/articles/security-config
+  features:
+    - manifest: "usesCleartextTraffic=true"

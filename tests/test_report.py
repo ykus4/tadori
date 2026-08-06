@@ -124,6 +124,23 @@ def test_sarif_shape(result):
     assert run["properties"]["verdict"] == "suspicious"
 
 
+def test_sarif_fingerprint_is_stable_across_builds(result):
+    finding = json.loads(report.render(result, "sarif"))["runs"][0]["results"][0]
+    fingerprint = finding["partialFingerprints"]["tadoriMatch/v1"]
+
+    # Same rule, same method, different build: the alert must not be re-opened.
+    result.app.version_name = "2.0"
+    result.capabilities[0].matches[0].evidence[0] = Evidence(
+        "api", "Lcom/x/Y;->f()V", TARGET, 0x99
+    )
+    again = json.loads(report.render(result, "sarif"))["runs"][0]["results"][0]
+    assert again["partialFingerprints"]["tadoriMatch/v1"] == fingerprint
+
+    result.capabilities[0].matches[0].location = "Lcom/x/Other;->send()V"
+    moved = json.loads(report.render(result, "sarif"))["runs"][0]["results"][0]
+    assert moved["partialFingerprints"]["tadoriMatch/v1"] != fingerprint
+
+
 def test_html_renders(result):
     html = report.render(result, "html")
     assert "<!DOCTYPE html>" in html
@@ -140,3 +157,57 @@ def test_unknown_format_is_rejected(result):
 def test_entry_point_table_lists_kinds(result):
     table = report.entry_point_table(result)
     assert table.row_count == 1
+
+
+# ---------------------------------------------------------------------------
+# call-chain graphs
+# ---------------------------------------------------------------------------
+
+
+def test_dot_draws_the_chain_from_entry_point_to_match(result):
+    dot = report.render(result, "dot")
+    assert dot.startswith("// tadori")
+    assert "digraph tadori {" in dot and dot.rstrip().endswith("}")
+    assert "exported_service" in dot
+    assert "TAD-ACCS-0001" in dot
+    assert dot.count(" -> ") == 1  # entry -> match, one hop
+
+
+def test_mermaid_is_a_flowchart(result):
+    mermaid = report.render(result, "mermaid")
+    assert "graph LR" in mermaid
+    assert "-->" in mermaid
+    assert "<br/>" in mermaid  # multi-line labels, not raw newlines
+    assert "\n  n0" in mermaid
+
+
+def test_graph_reuses_one_node_per_method(result):
+    """A method reached twice must not appear twice, or the picture lies."""
+    capability = result.capabilities[0]
+    second = Match(
+        rule_id="TAD-ACCS-0001",
+        location=TARGET,
+        paths=[CallPath(ENTRY, (ENTRY.method, "Lcom/x/Mid;->go()V", TARGET))],
+        reachable=True,
+    )
+    capability.matches.append(second)
+
+    nodes, edges = report.call_graph(result)
+    assert len({n.id for n in nodes}) == len(nodes)
+    assert sum(1 for n in nodes if n.role == "match") == 1
+    assert len(set(edges)) == len(edges)
+
+
+def test_unreachable_match_is_drawn_without_edges():
+    dead = Match(rule_id="TAD-X-0001", location="Lcom/x/D;->f()V", reachable=False)
+    capability = Capability(
+        rule_id="TAD-X-0001",
+        name="dead capability",
+        severity=Severity.LOW,
+        scope="method",
+        matches=[dead],
+    )
+    scan = ScanResult(app=AppInfo(path="a.apk"), capabilities=[capability])
+    nodes, edges = report.call_graph(scan)
+    assert [n.role for n in nodes] == ["match"]
+    assert edges == []

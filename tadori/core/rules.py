@@ -30,12 +30,12 @@ from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
-
-import yaml
+from typing import Any
 
 from tadori.core import attack
 from tadori.core.features import MethodFeatures, Vocabulary
+from tadori.core.ingest import Manifest
+from tadori.core.loading import yaml_documents
 from tadori.core.models import EntryKind, Evidence, Severity
 from tadori.core.patterns import Pattern
 
@@ -52,15 +52,18 @@ CODE_LEAVES = {
     "type": "type",
     "opcode": "opcode",
 }
-#: Leaf keys that read manifest / packaging facts.
-FACT_LEAVES = (
-    "permission",
-    "intent_action",
-    "component",
-    "file",
-    "metadata",
-    "native_lib",
-)
+#: Fact leaves that are a plain glob over a collection of strings, and the
+#: ``AppFacts`` attribute each one reads.
+GLOB_FACTS = {
+    "permission": "permissions",
+    "intent_action": "intent_actions",
+    "file": "files",
+    "native_lib": "native_libs",
+}
+#: Leaf keys that read manifest / packaging facts. ``component``, ``exported``,
+#: ``metadata`` and ``manifest`` carry a compound value of their own, so they
+#: are matched by hand in :meth:`FactLeaf._lookup`.
+FACT_LEAVES = (*GLOB_FACTS, "component", "exported", "metadata", "manifest")
 #: Leaf keys that match the site being evaluated, not its contents.
 SITE_LEAVES = ("method", "class")
 #: Keys whose value denotes a method/field/type reference.
@@ -97,6 +100,32 @@ class AppFacts:
     files: list[str] = field(default_factory=list)
     native_libs: list[str] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
+    #: ``<application>`` attributes — see ingest.APPLICATION_FLAGS.
+    flags: dict[str, str] = field(default_factory=dict)
+    #: (type, name, permission) of every exported component; the permission is
+    #: "" when anything on the device may address it.
+    exported: list[tuple[str, str, str]] = field(default_factory=list)
+
+    @classmethod
+    def from_manifest(
+        cls,
+        manifest: Manifest,
+        *,
+        files: list[str] | None = None,
+        native_libs: list[str] | None = None,
+    ) -> AppFacts:
+        """The facts a scan or a fixture exposes to ``permission:`` & friends."""
+        return cls(
+            package=manifest.package,
+            permissions=set(manifest.permissions),
+            intent_actions=set(manifest.intent_actions),
+            components=[(c.type, c.special_kind) for c in manifest.components],
+            files=list(files or []),
+            native_libs=list(native_libs or []),
+            metadata=dict(manifest.metadata),
+            flags=dict(manifest.flags),
+            exported=[(c.type, c.name, c.permission) for c in manifest.exposed()],
+        )
 
 
 @dataclass
@@ -111,6 +140,49 @@ class EvalContext:
 # ---------------------------------------------------------------------------
 # nodes
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Trace:
+    """Why a node did or did not hold at one candidate site.
+
+    ``tadori explain`` prints this when a rule does not fire: "no match" is a
+    useless answer while writing a rule — which half of the condition failed is
+    the answer you need.
+    """
+
+    description: str
+    satisfied: bool
+    children: tuple[Trace, ...] = ()
+    kind: str = "leaf"  # leaf | all | any | not
+
+    @property
+    def leaves(self) -> tuple[Trace, ...]:
+        if not self.children:
+            return (self,)
+        return tuple(leaf for child in self.children for leaf in child.leaves)
+
+    @property
+    def satisfied_leaves(self) -> int:
+        return sum(1 for leaf in self.leaves if leaf.satisfied)
+
+    @property
+    def missing(self) -> list[str]:
+        """What actually has to change for this node to hold.
+
+        Only unsatisfied branches are descended into: an ``or`` whose first
+        alternative matched is not missing anything, and listing its other
+        alternatives would send a rule author after the wrong thing.
+        """
+        if self.satisfied:
+            return []
+        if not self.children:
+            return [self.description]
+        if self.kind == "any":
+            return ["one of (" + ", ".join(c.description for c in self.children) + ")"]
+        if self.kind == "not":
+            return [f"{self.children[0].description} must NOT hold"]
+        return [entry for child in self.children for entry in child.missing]
 
 
 class Node:
@@ -130,8 +202,22 @@ class Node:
         for child in self.children():
             yield from child.walk()
 
+    def trace(self, ctx: EvalContext) -> Trace:
+        """Evaluate, keeping the per-child verdicts for diagnostics."""
+        satisfied, _ = self.evaluate(ctx)
+        children = tuple(child.trace(ctx) for child in self.children())
+        return Trace(self.label(), satisfied, children, self.trace_kind())
+
     def describe(self) -> str:
         raise NotImplementedError
+
+    def label(self) -> str:
+        """Short form for a traced tree, where children print on their own line."""
+        return self.describe()
+
+    def trace_kind(self) -> str:
+        """How a failed node should be reported: leaf | all | any | not."""
+        return "leaf" if not self.children() else "all"
 
 
 @dataclass
@@ -182,10 +268,11 @@ class FactLeaf(Node):
         return True, [Evidence(self.key, hit, "manifest") for hit in found[:4]]
 
     def _lookup(self, facts: AppFacts) -> list[str]:
-        if self.key == "permission":
-            return [p for p in facts.permissions if fnmatch.fnmatch(p, self.value)]
-        if self.key == "intent_action":
-            return [a for a in facts.intent_actions if fnmatch.fnmatch(a, self.value)]
+        attribute = GLOB_FACTS.get(self.key)
+        if attribute is not None:
+            # Sorted so evidence is stable: permissions live in a set.
+            candidates = sorted(getattr(facts, attribute))
+            return [v for v in candidates if fnmatch.fnmatch(v, self.value)]
         if self.key == "component":
             wanted_type, _, wanted_kind = self.value.partition(":")
             return [
@@ -193,22 +280,45 @@ class FactLeaf(Node):
                 for ctype, kind in facts.components
                 if ctype == wanted_type and (not wanted_kind or kind == wanted_kind)
             ]
-        if self.key == "file":
-            return [f for f in facts.files if fnmatch.fnmatch(f, self.value)]
-        if self.key == "native_lib":
-            return [f for f in facts.native_libs if fnmatch.fnmatch(f, self.value)]
+        if self.key == "exported":
+            return self._exported(facts)
         if self.key == "metadata":
-            wanted_key, sep, wanted_value = self.value.partition("=")
-            return [
-                f"{k}={v}" if v else k
-                for k, v in facts.metadata.items()
-                if fnmatch.fnmatch(k, wanted_key)
-                and (not sep or fnmatch.fnmatch(v, wanted_value))
-            ]
+            return _pairs(facts.metadata, self.value)
+        if self.key == "manifest":
+            return _pairs(facts.flags, self.value)
         raise RuleError(f"unknown fact feature: {self.key}")
+
+    def _exported(self, facts: AppFacts) -> list[str]:
+        """``exported: provider`` / ``exported: provider:unprotected``.
+
+        Exported means any app on the device can address the component;
+        ``unprotected`` narrows that to the ones no permission guards.
+        """
+        wanted_type, _, guard = self.value.partition(":")
+        found = []
+        for ctype, name, permission in facts.exported:
+            if wanted_type not in (ctype, "*"):
+                continue
+            if guard == "unprotected" and permission:
+                continue
+            if guard == "protected" and not permission:
+                continue
+            found.append(f"{ctype} {name}" + (f" ({permission})" if permission else ""))
+        return found
 
     def describe(self) -> str:
         return f"{self.key}: {self.value}"
+
+
+def _pairs(table: dict[str, str], wanted: str) -> list[str]:
+    """Match a ``key`` or ``key=value`` glob against a mapping of facts."""
+    wanted_key, sep, wanted_value = wanted.partition("=")
+    return [
+        f"{k}={v}" if v else k
+        for k, v in table.items()
+        if fnmatch.fnmatch(k, wanted_key)
+        and (not sep or fnmatch.fnmatch(v, wanted_value))
+    ]
 
 
 @dataclass
@@ -270,6 +380,12 @@ class BoolNode(Node):
         joiner = {"and": " AND ", "or": " OR "}.get(self.op, f" {self.n}-of ")
         return "(" + joiner.join(c.describe() for c in self.nodes) + ")"
 
+    def label(self) -> str:
+        return {"and": "all of", "or": "any of"}.get(self.op, f"{self.n} of")
+
+    def trace_kind(self) -> str:
+        return "all" if self.op == "and" else "any"
+
 
 @dataclass
 class NotNode(Node):
@@ -287,6 +403,12 @@ class NotNode(Node):
 
     def describe(self) -> str:
         return f"NOT {self.child.describe()}"
+
+    def label(self) -> str:
+        return "none of"
+
+    def trace_kind(self) -> str:
+        return "not"
 
 
 @dataclass
@@ -307,6 +429,11 @@ class CountNode(Node):
         found = self.leaf.hits(ctx)
         ok = _COMPARATORS[self.comparator](len(found), self.threshold)
         return ok, found[:4] if ok else []
+
+    def trace(self, ctx: EvalContext) -> Trace:
+        found = len(self.leaf.hits(ctx))
+        ok = _COMPARATORS[self.comparator](found, self.threshold)
+        return Trace(f"{self.describe()} (found {found})", ok)
 
     def describe(self) -> str:
         return f"count({self.leaf.describe()}) {self.comparator} {self.threshold}"
@@ -346,18 +473,11 @@ class Rule:
     reach: ReachSpec | None = None
     source: Path | None = None
 
-    DEFAULT_WEIGHTS: ClassVar[dict[str, float]] = {
-        "high": 20.0,
-        "medium": 7.0,
-        "low": 2.0,
-        "info": 0.5,
-    }
-
     @property
     def base_weight(self) -> float:
         if self.weight is not None:
             return self.weight
-        return self.DEFAULT_WEIGHTS[self.severity.value]
+        return self.severity.default_weight
 
     @property
     def needs_every_site(self) -> bool:
@@ -517,22 +637,12 @@ def builtin_rules_dir() -> Path:
 
 def load_rules(paths: list[Path] | None = None) -> list[Rule]:
     """Load rules from files/directories, defaulting to the bundled pack."""
-    targets = paths or [builtin_rules_dir()]
-    files: list[Path] = []
-    for target in targets:
-        target = Path(target)
-        if target.is_dir():
-            files.extend(sorted(target.rglob("*.yml")) + sorted(target.rglob("*.yaml")))
-        elif target.exists():
-            files.append(target)
-        else:
-            raise RuleError(f"rule path not found: {target}")
-
-    rules: list[Rule] = []
-    for path in sorted(set(files)):
-        for document in yaml.safe_load_all(path.read_text()):
-            if document:
-                rules.append(parse_rule(document, path))
+    rules = [
+        parse_rule(document, path)
+        for document, path in yaml_documents(
+            paths, builtin_rules_dir(), kind="rule", error=RuleError
+        )
+    ]
 
     duplicates = sorted(
         rule_id for rule_id, n in Counter(r.id for r in rules).items() if n > 1

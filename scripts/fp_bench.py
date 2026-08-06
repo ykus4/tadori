@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tadori import __version__  # noqa: E402
-from tadori.core import engine  # noqa: E402
+from tadori.core import batch, engine  # noqa: E402
 from tadori.core.rules import Rule, load_rules  # noqa: E402
 
 
@@ -42,22 +41,23 @@ class Tally:
 
 
 def scan_corpus(paths: list[Path], rules: list[Rule], timeout: float) -> Tally:
+    """Scan the corpus with the shared batch runner and tally what fired."""
     tally = Tally()
     options = engine.ScanOptions(rules=rules, timeout=timeout)
+    total = len(paths)
 
-    for i, path in enumerate(paths, 1):
-        started = time.monotonic()
-        print(f"[{i}/{len(paths)}] {path.name}", file=sys.stderr, flush=True)
-        try:
-            result = engine.scan(path, options)
-        except Exception as exc:  # a corpus always has a few unreadable files
-            tally.failures.append(f"{path.name}: {exc}")
+    def announce(number: int, path: Path) -> None:
+        print(f"[{number}/{total}] {path.name}", file=sys.stderr, flush=True)
+
+    for outcome in batch.scan_all(paths, options, on_start=announce):
+        if not outcome.ok:
+            tally.failures.append(f"{outcome.path.name}: {outcome.error}")
             continue
         tally.apps += 1
-        tally.seconds += time.monotonic() - started
-        tally.scores.append(result.score)
-        tally.verdicts[result.verdict] += 1
-        for capability in result.capabilities:
+        tally.seconds += outcome.duration_sec
+        tally.scores.append(outcome.result.score)
+        tally.verdicts[outcome.result.verdict] += 1
+        for capability in outcome.result.capabilities:
             tally.hits[capability.rule_id] += 1
     return tally
 
@@ -133,7 +133,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=600.0)
     args = parser.parse_args()
 
-    apks = sorted(args.corpus.rglob("*.apk"))[: args.limit]
+    apks = batch.collect_apps([args.corpus], limit=args.limit)
     if not apks:
         print(f"no .apk found under {args.corpus}", file=sys.stderr)
         return 2

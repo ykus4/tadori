@@ -23,16 +23,15 @@ That keeps the rule corpus testable with no sample, no APK and no toolchain:
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from tadori.core import engine
 from tadori.core.features import AppIndex, MethodFeatures
 from tadori.core.ingest import Component, Manifest
+from tadori.core.loading import yaml_documents
 from tadori.core.models import AppInfo, ScanResult
 from tadori.core.rules import AppFacts, Rule, RuleError
 
@@ -79,22 +78,12 @@ def builtin_fixtures_dir() -> Path:
 
 def load_fixtures(paths: list[Path] | None = None) -> list[Fixture]:
     """Load fixtures from files/directories, defaulting to the bundled set."""
-    files: list[Path] = []
-    for target in paths or [builtin_fixtures_dir()]:
-        target = Path(target)
-        if target.is_dir():
-            files.extend(sorted(target.rglob("*.yml")) + sorted(target.rglob("*.yaml")))
-        elif target.exists():
-            files.append(target)
-        else:
-            raise FixtureError(f"fixture path not found: {target}")
-
-    fixtures: list[Fixture] = []
-    for path in sorted(set(files)):
-        for document in yaml.safe_load_all(path.read_text()):
-            if document:
-                fixtures.append(_parse(document, path))
-    return fixtures
+    return [
+        _parse(document, path)
+        for document, path in yaml_documents(
+            paths, builtin_fixtures_dir(), kind="fixture", error=FixtureError
+        )
+    ]
 
 
 def _parse(document: dict[str, Any], source: Path) -> Fixture:
@@ -131,14 +120,10 @@ def build_subject(app: dict[str, Any]) -> engine.Subject:
     """Turn a fixture's ``app`` block into something the matcher can consume."""
     index = _build_index(app)
     manifest = _build_manifest(app)
-    facts = AppFacts(
-        package=manifest.package,
-        permissions=set(manifest.permissions),
-        intent_actions=set(manifest.intent_actions),
-        components=[(c.type, c.special_kind) for c in manifest.components],
+    facts = AppFacts.from_manifest(
+        manifest,
         files=list(app.get("files") or []),
         native_libs=list(app.get("native_libs") or []),
-        metadata=dict(app.get("metadata") or {}),
     )
     info = AppInfo(
         path="fixture",
@@ -154,20 +139,12 @@ def build_subject(app: dict[str, Any]) -> engine.Subject:
 
 def _build_index(app: dict[str, Any]) -> AppIndex:
     index = AppIndex()
-    index.callers = defaultdict(set)
-    index.methods_by_class = defaultdict(list)
     index.supers = {k: list(v) for k, v in (app.get("supers") or {}).items()}
     index.js_bridge_classes = set(app.get("js_bridge_classes") or [])
 
     methods = app.get("methods") or []
     for spec in methods:
-        ref = str(spec["ref"])
-        cls = ref.split("->", 1)[0]
-        index.internal_refs.add(ref)
-        index.internal_classes.add(cls)
-        index.methods_by_class[cls].append(ref)
-        index.signature_counts[ref.partition("->")[2]] += 1
-
+        ref = index.record_method(str(spec["ref"]))
         feats = MethodFeatures(
             api=_hits(spec.get("api")),
             string=_hits(spec.get("string")),
@@ -198,6 +175,7 @@ def _build_manifest(app: dict[str, Any]) -> Manifest:
         application_class=app.get("application_class", ""),
         permissions=list(app.get("permissions") or []),
         metadata=dict(app.get("metadata") or {}),
+        flags={k: str(v).lower() for k, v in (app.get("flags") or {}).items()},
     )
     for spec in app.get("components") or []:
         actions = [str(a) for a in (spec.get("actions") or [])]
@@ -237,8 +215,9 @@ def run(fixture: Fixture, rules: dict[str, Rule]) -> FixtureOutcome:
     matched = bool(result.capabilities)
 
     if matched != fixture.should_match:
-        expected = "a match" if fixture.should_match else "no match"
-        return FixtureOutcome(fixture, False, f"expected {expected}", result)
+        if not fixture.should_match:
+            return FixtureOutcome(fixture, False, "expected no match", result)
+        return FixtureOutcome(fixture, False, _why_not(subject, rule), result)
 
     if matched:
         problem = _check_path_expectations(fixture, result)
@@ -246,6 +225,19 @@ def run(fixture: Fixture, rules: dict[str, Rule]) -> FixtureOutcome:
             return FixtureOutcome(fixture, False, problem, result)
 
     return FixtureOutcome(fixture, True, result=result)
+
+
+def _why_not(subject: engine.Subject, rule: Rule) -> str:
+    """ "expected a match" plus the part of the condition that did not hold."""
+    diagnosis = engine.diagnose(subject, rule)
+    if diagnosis.matched_sites:
+        return "expected a match; the condition held but nothing could reach it"
+    if diagnosis.trace is None:
+        return "expected a match; no site in the fixture carries a relevant feature"
+    if not diagnosis.missing:
+        return "expected a match"
+    where = f" at {diagnosis.location}" if diagnosis.location else ""
+    return f"expected a match; missing{where}: {'; '.join(diagnosis.missing[:3])}"
 
 
 def _check_path_expectations(fixture: Fixture, result: ScanResult) -> str:

@@ -11,8 +11,9 @@ inputs:
     required: true
   baseline:
     description: >
-      Optional path to a previous build of the same app. When set, the action also
-      runs `tadori diff` and reports what the newer build gained.
+      Optional path to a previous build of the same app — an APK, or a scan result
+      stored earlier with `tadori scan -f json`. When set, the action also runs
+      `tadori diff` and reports what the newer build gained.
     required: false
   rules:
     description: Extra rule file or directory to load alongside the bundled pack.

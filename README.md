@@ -58,7 +58,8 @@ In CI, as a GitHub Action:
 - uses: ykus4/tadori@v0
   with:
     apk: app/build/outputs/apk/release/app-release.apk
-    baseline: previous-release.apk   # optional: also run `tadori diff`
+    baseline: baseline.json          # optional: also run `tadori diff`
+                                     # (an APK, or a stored `scan -f json` result)
     fail-on: high
 - uses: github/codeql-action/upload-sarif@v3
   with:
@@ -70,8 +71,9 @@ In CI, as a GitHub Action:
 ```bash
 tadori scan app.apk                       # capability report with call paths
 tadori scan app.apk -v                    # every site, full chains, ATT&CK names
-tadori scan app.apk -f sarif -o out.sarif # GitHub code scanning
+tadori scan app.apk -f sarif -o out.sarif # GitHub code scanning (stable fingerprints)
 tadori scan app.apk -f html -o report.html
+tadori scan app.apk -f mermaid            # call chains as a diagram (also -f dot)
 tadori scan app.apk --fail-on high        # CI gate
 
 tadori explain TAD-ACCS-0001 app.apk      # why a rule fired (or did not)
@@ -79,7 +81,9 @@ tadori rules list                         # what ships in the pack
 tadori rules lint                         # validate rule metadata
 tadori rules test                         # run the rule fixtures
 
+tadori triage ~/samples -f csv            # rank a directory of apps, worst first
 tadori diff old.apk new.apk               # what did this update gain?
+tadori diff baseline.json new.apk         # …or diff against a stored scan result
 ```
 
 Inputs: an `.apk`, a bare `.dex`, or a directory containing `classes*.dex` (plus an
@@ -105,6 +109,46 @@ new permissions
 
 `--fail-on-regression` exits non-zero when a build gains capability or exposure, so this
 works as a release gate.
+
+Either side may be a scan result stored earlier instead of an APK, which is usually what
+CI has to hand:
+
+```bash
+tadori scan reviewed.apk -f json -o baseline.json   # at review time
+tadori diff baseline.json new.apk --fail-on-regression
+```
+
+### `tadori triage` — a directory of apps at once
+
+```
+$ tadori triage ~/samples --fail-on high
+                       12 app(s) scanned, worst first
+  score  verdict                package              version   H  M  L  top capabilities
+     71  malicious-capability…  com.fake.bank        2.1       4  3  2  TAD-ACCS-0001, TAD-CRED-0001, …
+     38  suspicious             org.fdroid.fdroid    1.19       1  4  3  TAD-DROP-0001, TAD-DISC-0001, …
+```
+
+`-f json` / `-f csv` for a machine-readable ranking; one unreadable file is skipped, not
+fatal.
+
+### `tadori explain` — including when a rule does *not* fire
+
+```
+$ tadori explain TAD-CRED-0002 app.apk
+no match in this app
+
+closest site Lcom/x/R;->onReceive(…)V  (best of 1 candidate site(s))
+  ✗ all of
+    ✓ any of
+      ✓ api: Landroid/telephony/SmsMessage;->getMessageBody
+      ✗ string: content://sms
+    ✗ any of
+      ✗ permission: android.permission.RECEIVE_SMS
+      ✗ intent_action: android.provider.Telephony.SMS_RECEIVED
+```
+
+The same diagnosis is printed by `tadori rules test` when a fixture stops matching, so a
+broken rule says which half of its condition broke.
 
 ## How it works
 
@@ -150,11 +194,11 @@ rule:
     max_hops: 6
 ```
 
-Features and combinators: [`docs/rules.md`](docs/rules.md). The full pack — **58 rules**
+Features and combinators: [`docs/rules.md`](docs/rules.md). The full pack — **62 rules**
 covering accessibility abuse (on-device ATS fraud), overlay phishing, notification and
 SMS credential theft, droppers and runtime code loading, C2 channels, remote access,
-collection, exfiltration, impact, analysis evasion and persistence — is listed in
-[`docs/rule-pack.md`](docs/rule-pack.md).
+collection, exfiltration, impact, analysis evasion, persistence and manifest-declared
+exposure — is listed in [`docs/rule-pack.md`](docs/rule-pack.md).
 
 ### Every rule is pinned by a fixture
 
@@ -180,7 +224,7 @@ fixture:
 
 ```
 $ tadori rules test
-78 fixtures (59 positive, 19 negative) · 58 rules · 78/78 passed
+88 fixtures (63 positive, 25 negative) · 62 rules · 88/88 passed
 ```
 
 CI requires a positive fixture for every rule, so no sample — benign or otherwise — is
@@ -204,6 +248,10 @@ rejects unknown ATT&CK ids, duplicate rule ids and missing metadata.
   `DexClassLoader` payloads are reported as capabilities, not followed.
 - **Packed and native code.** If `TAD-EVAS-0007` or `TAD-NAT-0001` fires, part of the
   behaviour lives outside the DEX and this tool cannot see it.
+- **Cross-platform apps are mostly invisible.** Flutter, React Native, Unity and Xamarin
+  keep their logic in a bundle, in IL2CPP output or in .NET assemblies. tadori detects
+  the toolkit and says so in a warning, but what it reports for such an app is the
+  Android host, not the program.
 - **No published false-positive numbers.** `scripts/fp_bench.py` measures per-rule hit
   rates over a corpus of apps *you* supply and writes a markdown/JSON table; this project
   deliberately downloads and bundles no APKs, so there is no published corpus run yet.
