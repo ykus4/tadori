@@ -45,6 +45,7 @@ plugins:
 
 nav:
   - Home: index.md
-  - Rule reference: rules.md
+  - Rule pack: rule-pack.md
+  - Writing rules: rules.md
   - Design notes: design.md
   - Roadmap: ROADMAP.md

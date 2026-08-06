@@ -1,0 +1,190 @@
+# Fixtures for tadori/rules/dropper.yml and c2.yml.
+---
+fixture:
+  name: an install session is created
+  rule: TAD-DROP-0001
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/content/pm/PackageInstaller;->createSession(Landroid/content/pm/PackageInstaller$SessionParams;)I"
+---
+fixture:
+  name: sharing an APK file without the install permission
+  rule: TAD-DROP-0001
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["application/vnd.android.package-archive"]
+---
+fixture:
+  name: code is loaded from a file at runtime
+  rule: TAD-DROP-0002
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Ldalvik/system/DexClassLoader;-><init>(Ljava/lang/String;Ljava/lang/String;)V"
+---
+fixture:
+  name: a class decrypts an asset and hands it to a class loader
+  rule: TAD-DROP-0003
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Loader;->decrypt()[B"
+        api: ["Ljavax/crypto/Cipher;->doFinal([B)[B"]
+      - ref: "Lcom/x/Loader;->stage()V"
+        api:
+          - "Landroid/content/res/AssetManager;->open(Ljava/lang/String;)Ljava/io/InputStream;"
+      - ref: "Lcom/x/Loader;->load()V"
+        api:
+          - "Ldalvik/system/InMemoryDexClassLoader;-><init>([B)V"
+---
+fixture:
+  name: decrypting an asset without loading code from it
+  rule: TAD-DROP-0003
+  expect: no-match
+  app:
+    methods:
+      - ref: "Lcom/x/Loader;->decrypt()[B"
+        api:
+          - "Ljavax/crypto/Cipher;->doFinal([B)[B"
+          - "Landroid/content/res/AssetManager;->open(Ljava/lang/String;)Ljava/io/InputStream;"
+---
+fixture:
+  name: a class drops a file and executes it
+  rule: TAD-DROP-0004
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Native;->write()V"
+        api: ["Ljava/io/File;->setExecutable(Z)Z"]
+      - ref: "Lcom/x/Native;->run()V"
+        api: ["Ljava/lang/Runtime;->exec(Ljava/lang/String;)Ljava/lang/Process;"]
+---
+fixture:
+  name: hidden API invoked through reflection
+  rule: TAD-DROP-0005
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Ljava/lang/Class;->getDeclaredMethod(Ljava/lang/String;)Ljava/lang/reflect/Method;"
+          - "Ljava/lang/reflect/Method;->invoke(Ljava/lang/Object;)Ljava/lang/Object;"
+---
+fixture:
+  name: an executable payload is downloaded into app storage
+  rule: TAD-DROP-0006
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Fetch;->get()V"
+        api: ["Ljava/net/URL;->openStream()Ljava/io/InputStream;"]
+        string: ["/payload.apk"]
+      - ref: "Lcom/x/Fetch;->save()V"
+        api: ["Ljava/io/FileOutputStream;->write([B)V"]
+---
+fixture:
+  name: Telegram bot API used as a channel
+  rule: TAD-C2-0001
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["https://api.telegram.org/bot123456:AA/sendMessage"]
+---
+fixture:
+  name: push messages handled by a service
+  rule: TAD-C2-0002
+  expect: match
+  entry_kind: service
+  app:
+    components:
+      - {type: service, name: com.x.Fcm}
+    methods:
+      - ref: "Lcom/x/Fcm;->onMessageReceived(Lcom/google/firebase/messaging/RemoteMessage;)V"
+---
+fixture:
+  name: endpoint hardcoded as a public IP address
+  rule: TAD-C2-0003
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["http://203.0.113.5/gate.php"]
+---
+fixture:
+  name: loopback and LAN addresses are development traffic
+  rule: TAD-C2-0003
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string:
+          - "http://127.0.0.1:8080/debug"
+          - "http://192.168.1.10/print"
+          - "http://10.0.0.2/api"
+---
+fixture:
+  name: a class opens a raw socket and writes to it
+  rule: TAD-C2-0004
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Chan;->connect()V"
+        api: ["Ljava/net/Socket;-><init>(Ljava/lang/String;I)V"]
+      - ref: "Lcom/x/Chan;->send()V"
+        api: ["Ljava/io/OutputStream;->write([B)V"]
+---
+fixture:
+  name: device identifiers posted from the same class
+  rule: TAD-C2-0005
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Beacon;->collect()V"
+        api:
+          - "Landroid/telephony/TelephonyManager;->getDeviceId()Ljava/lang/String;"
+      - ref: "Lcom/x/Beacon;->post()V"
+        api: ["Ljava/net/URL;->openConnection()Ljava/net/URLConnection;"]
+---
+fixture:
+  name: WebSocket channel held open
+  rule: TAD-C2-0006
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["wss://c2.example/ws"]
+---
+fixture:
+  name: real endpoint fetched from a paste site
+  rule: TAD-C2-0007
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["https://pastebin.com/raw/deadbeef"]

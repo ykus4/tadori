@@ -1,0 +1,72 @@
+# Remote control, reconnaissance and exfiltration shapes.
+---
+rule:
+  meta:
+    id: TAD-RAT-0001
+    name: stream the screen to a remote endpoint
+    scope: class
+    severity: high
+    attack: [T1513, T1663]
+    description: >
+      Captures the screen in the same class that writes to the network — the
+      remote-viewing half of a device-takeover module, as opposed to a
+      screenshot feature that stays on the device.
+    references:
+      - https://attack.mitre.org/techniques/T1513/
+  features:
+    - or:
+        - api: "Landroid/media/projection/MediaProjection;->createVirtualDisplay"
+        - api: "Landroid/hardware/display/DisplayManager;->createVirtualDisplay"
+        - api: "Landroid/accessibilityservice/AccessibilityService;->takeScreenshot"
+    - or:
+        - api: "Ljava/net/Socket;->getOutputStream"
+        - api: "Lokhttp3/OkHttpClient;->newWebSocket"
+        - api: "Ljava/net/HttpURLConnection;->getOutputStream"
+        - api: "Ljava/io/DataOutputStream;->write"
+---
+rule:
+  meta:
+    id: TAD-DISC-0001
+    name: check whether specific packages are installed
+    scope: method
+    severity: medium
+    attack: [T1418, T1424]
+    description: >
+      Probes for named packages one by one rather than listing them. Overlay and
+      ATS modules do this to decide which target app is worth attacking; so do
+      apps checking for their own companion app, hence the repetition threshold.
+    references:
+      - https://attack.mitre.org/techniques/T1418/
+  features:
+    - or:
+        - count:
+            api: "Landroid/content/pm/PackageManager;->getPackageInfo"
+            value: ">=3"
+        - count:
+            api: "Landroid/content/pm/PackageManager;->getLaunchIntentForPackage"
+            value: ">=3"
+        - count:
+            api: "Landroid/content/pm/PackageManager;->getApplicationInfo"
+            value: ">=3"
+---
+rule:
+  meta:
+    id: TAD-EXF-0001
+    name: archive collected data before sending it
+    scope: class
+    severity: medium
+    attack: [T1532, T1646]
+    description: >
+      Packs data into an archive in the same class that talks to the network.
+      Bulk exfiltration looks like this; so does crash-report upload.
+    references:
+      - https://attack.mitre.org/techniques/T1532/
+  features:
+    - or:
+        - api: "Ljava/util/zip/ZipOutputStream;->putNextEntry"
+        - api: "Ljava/util/zip/GZIPOutputStream;-><init>"
+        - api: "Ljava/util/zip/ZipEntry;-><init>"
+    - or:
+        - api: "Ljava/net/HttpURLConnection;->getOutputStream"
+        - api: "Lokhttp3/OkHttpClient;->newCall"
+        - api: "Ljava/net/Socket;->getOutputStream"

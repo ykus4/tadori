@@ -1,0 +1,97 @@
+name: tadori
+description: Scan an Android APK for attacker-relevant capabilities and their entry-point reachability
+author: ykus4
+branding:
+  icon: crosshair
+  color: purple
+
+inputs:
+  apk:
+    description: Path to the APK (or .dex, or a directory of classes*.dex) to scan.
+    required: true
+  baseline:
+    description: >
+      Optional path to a previous build of the same app. When set, the action also
+      runs `tadori diff` and reports what the newer build gained.
+    required: false
+  rules:
+    description: Extra rule file or directory to load alongside the bundled pack.
+    required: false
+  fail-on:
+    description: Fail the job when a capability of this severity or higher is found (high|medium|low|info).
+    required: false
+  fail-on-regression:
+    description: With `baseline`, fail the job when the newer build gains capability or exposure.
+    required: false
+    default: "false"
+  sarif-file:
+    description: Where to write the SARIF report.
+    required: false
+    default: tadori.sarif
+  version:
+    description: Version of tadori to install from PyPI (defaults to the latest release).
+    required: false
+    default: ""
+
+outputs:
+  sarif-file:
+    description: Path to the SARIF report that was written.
+    value: ${{ inputs.sarif-file }}
+  score:
+    description: Capability-risk score of the scanned app.
+    value: ${{ steps.scan.outputs.score }}
+  verdict:
+    description: Verdict band for the score.
+    value: ${{ steps.scan.outputs.verdict }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.13"
+
+    - name: Install tadori
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.version }}" ]; then
+          python -m pip install --quiet "tadori==${{ inputs.version }}"
+        else
+          python -m pip install --quiet tadori
+        fi
+
+    - name: Scan
+      id: scan
+      shell: bash
+      run: |
+        rules_arg=""
+        if [ -n "${{ inputs.rules }}" ]; then rules_arg="--rules ${{ inputs.rules }}"; fi
+
+        tadori scan "${{ inputs.apk }}" $rules_arg -f sarif -o "${{ inputs.sarif-file }}"
+        tadori scan "${{ inputs.apk }}" $rules_arg -f json -o tadori-report.json
+
+        python - <<'PY' >> "$GITHUB_OUTPUT"
+        import json, os
+        report = json.load(open("tadori-report.json"))
+        print(f"score={report['score']}")
+        print(f"verdict={report['verdict']}")
+        PY
+
+        tadori scan "${{ inputs.apk }}" $rules_arg >> "$GITHUB_STEP_SUMMARY" || true
+
+    - name: Diff against the baseline build
+      if: inputs.baseline != ''
+      shell: bash
+      run: |
+        fail_arg=""
+        if [ "${{ inputs.fail-on-regression }}" = "true" ]; then
+          fail_arg="--fail-on-regression"
+        fi
+        tadori diff "${{ inputs.baseline }}" "${{ inputs.apk }}" $fail_arg \
+          | tee -a "$GITHUB_STEP_SUMMARY"
+
+    - name: Gate on severity
+      if: inputs.fail-on != ''
+      shell: bash
+      run: tadori scan "${{ inputs.apk }}" --fail-on "${{ inputs.fail-on }}" > /dev/null

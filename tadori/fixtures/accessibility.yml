@@ -1,0 +1,168 @@
+# Fixtures for tadori/rules/accessibility.yml and overlay.yml.
+---
+fixture:
+  name: accessibility service performs a global action
+  rule: TAD-ACCS-0001
+  expect: match
+  entry_kind: accessibility_service
+  hops: 0
+  app:
+    components:
+      - type: service
+        name: com.x.Svc
+        permission: android.permission.BIND_ACCESSIBILITY_SERVICE
+    methods:
+      - ref: "Lcom/x/Svc;->onAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V"
+        api:
+          - "Landroid/accessibilityservice/AccessibilityService;->performGlobalAction(I)Z"
+---
+fixture:
+  name: gesture dispatch two hops below the accessibility callback
+  rule: TAD-ACCS-0001
+  expect: match
+  entry_kind: accessibility_service
+  hops: 2
+  app:
+    components:
+      - type: service
+        name: com.x.Svc
+        permission: android.permission.BIND_ACCESSIBILITY_SERVICE
+    methods:
+      - ref: "Lcom/x/Svc;->onAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V"
+        calls: ["Lcom/x/Ats;->run()V"]
+      - ref: "Lcom/x/Ats;->run()V"
+        calls: ["Lcom/x/Ats;->tap()V"]
+      - ref: "Lcom/x/Ats;->tap()V"
+        api:
+          - "Landroid/accessibilityservice/AccessibilityService;->dispatchGesture(Landroid/accessibayservice/GestureDescription;)Z"
+---
+fixture:
+  name: node action without any accessibility service is not this capability
+  rule: TAD-ACCS-0001
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api: ["Landroid/view/accessibility/AccessibilityNodeInfo;->performAction(I)Z"]
+---
+fixture:
+  name: accessibility event text is harvested
+  rule: TAD-ACCS-0002
+  expect: match
+  entry_kind: accessibility_service
+  app:
+    components:
+      - type: service
+        name: com.x.Svc
+        permission: android.permission.BIND_ACCESSIBILITY_SERVICE
+    methods:
+      - ref: "Lcom/x/Svc;->onAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V"
+        api:
+          - "Landroid/view/accessibility/AccessibilityNodeInfo;->getText()Ljava/lang/CharSequence;"
+---
+fixture:
+  name: reading node text in an app with no accessibility service
+  rule: TAD-ACCS-0002
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->describe()V"
+        api:
+          - "Landroid/view/accessibility/AccessibilityNodeInfo;->getText()Ljava/lang/CharSequence;"
+---
+fixture:
+  name: foreground app polled from an exported activity
+  rule: TAD-ACCS-0003
+  expect: match
+  entry_kind: exported_activity
+  hops: 0
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/app/ActivityManager;->getRunningAppProcesses()Ljava/util/List;"
+---
+fixture:
+  name: foreground polling in dead code nothing can reach
+  rule: TAD-ACCS-0003
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+      - ref: "Lcom/x/Orphan;->probe()V"
+        api:
+          - "Landroid/app/usage/UsageStatsManager;->queryUsageStats(IJJ)Ljava/util/List;"
+---
+fixture:
+  name: input method observes key events
+  rule: TAD-ACCS-0004
+  expect: match
+  entry_kind: input_method
+  app:
+    components:
+      - type: service
+        name: com.x.Ime
+        permission: android.permission.BIND_INPUT_METHOD
+    methods:
+      - ref: "Lcom/x/Ime;->onKeyEvent(Landroid/view/KeyEvent;)Z"
+---
+fixture:
+  name: overlay window drawn with the alert-window permission
+  rule: TAD-OVER-0001
+  expect: match
+  entry_kind: exported_activity
+  app:
+    permissions: [android.permission.SYSTEM_ALERT_WINDOW]
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->show()V"
+        api:
+          - "Landroid/view/WindowManager;->addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"
+        string: []
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        calls: ["Lcom/x/Main;->show()V"]
+---
+fixture:
+  name: addView inside an ordinary layout has no overlay context
+  rule: TAD-OVER-0001
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/view/WindowManager;->addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"
+---
+fixture:
+  name: the overlay permission screen is opened
+  rule: TAD-OVER-0002
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["android.settings.action.MANAGE_OVERLAY_PERMISSION"]
+---
+fixture:
+  name: remote page loaded into a WebView that exposes a bridge
+  rule: TAD-OVER-0003
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Web, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Web;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/webkit/WebView;->addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V"
+          - "Landroid/webkit/WebView;->loadUrl(Ljava/lang/String;)V"

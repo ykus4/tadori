@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from tadori import __version__
-from tadori.core import attack, diff, engine, report
+from tadori.core import attack, diff, engine, fixtures, report
 from tadori.core.models import Severity
 from tadori.core.rules import RuleError, lint, load_rules
 
@@ -284,6 +284,56 @@ def rules_lint(rule_paths: tuple[Path, ...]) -> None:
         err.print(f"\n[red]{len(broken)} of {len(rules)} rules have problems[/red]")
         sys.exit(1)
     console.print(f"[green]ok[/green] {len(rules)} rules, no problems")
+
+
+@rules_group.command("test")
+@rule_option
+@click.option(
+    "--fixtures",
+    "fixture_paths",
+    multiple=True,
+    type=click.Path(exists=True, path_type=Path),
+    help="Fixture file or directory (repeatable). Defaults to the bundled set.",
+)
+@click.option(
+    "--require-coverage",
+    is_flag=True,
+    help="Fail when a rule has no positive fixture.",
+)
+def rules_test(
+    rule_paths: tuple[Path, ...],
+    fixture_paths: tuple[Path, ...],
+    require_coverage: bool,
+) -> None:
+    """Run the rule fixtures: synthetic apps that pin each rule's behaviour."""
+    rules = _run(lambda: load_rules(list(rule_paths) or None))
+    cases = _run(lambda: fixtures.load_fixtures(list(fixture_paths) or None))
+    _run(lambda: fixtures.require_known_rules(cases, rules))
+
+    outcomes, uncovered = fixtures.run_all(cases, rules)
+    failures = [o for o in outcomes if not o.passed]
+
+    for outcome in failures:
+        console.print(
+            f"[red]FAIL[/red] {outcome.fixture.rule_id}  {outcome.fixture.name}\n"
+            f"       {outcome.detail}  [dim]({outcome.fixture.source.name})[/dim]"
+        )
+
+    positives = sum(1 for c in cases if c.should_match)
+    console.print(
+        f"\n{len(cases)} fixtures ({positives} positive, {len(cases) - positives} negative)"
+        f" · {len(rules)} rules · [{'red' if failures else 'green'}]"
+        f"{len(outcomes) - len(failures)}/{len(outcomes)} passed[/]"
+    )
+    if uncovered:
+        style = "red" if require_coverage else "yellow"
+        console.print(
+            f"[{style}]{len(uncovered)} rule(s) without a positive fixture:[/{style}] "
+            + ", ".join(sorted(uncovered))
+        )
+
+    if failures or (require_coverage and uncovered):
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

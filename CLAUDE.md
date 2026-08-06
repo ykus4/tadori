@@ -18,6 +18,7 @@ uv sync                              # install
 uv run tadori scan app.apk           # scan
 uv run tadori explain TAD-ACCS-0001 app.apk
 uv run tadori rules lint             # validate the bundled pack
+uv run tadori rules test             # run the rule fixtures
 uv run pytest -q                     # unit tests (no APK needed)
 uv run ruff check . && uv run ruff format .
 TADORI_TEST_APK=/path/app.apk uv run pytest tests/test_integration.py -q
@@ -29,6 +30,7 @@ TADORI_TEST_APK=/path/app.apk uv run pytest tests/test_integration.py -q
 tadori/
 ├── cli.py                 ← click CLI: scan / explain / rules / diff
 ├── rules/*.yml            ← the bundled rule pack, grouped by area
+├── fixtures/*.yml         ← synthetic apps pinning each rule's behaviour
 ├── templates/             ← jinja2 HTML report
 └── core/
     ├── ingest.py          ← APK / DEX / directory loading, manifest parsing
@@ -37,7 +39,8 @@ tadori/
     ├── entrypoints.py     ← entry-point discovery and classification
     ├── graph.py           ← reverse BFS from a match to an entry point
     ├── rules.py           ← YAML rule format: parse, evaluate, lint
-    ├── engine.py          ← orchestration: load → index → match → reach → score
+    ├── engine.py          ← orchestration: load → index → Subject → analyze → score
+    ├── fixtures.py        ← builds a Subject from a fixture YAML (no DEX involved)
     ├── libraries.py       ← app-code vs bundled-library provenance
     ├── score.py           ← transparent weighted score
     ├── diff.py            ← version-to-version capability diff
@@ -57,8 +60,14 @@ tadori/
 - **The polymorphic cut** in `graph.POLYMORPHIC_LIMIT` is load-bearing. Removing it
   fabricates call chains between unrelated components.
 - **Score stays explainable.** Every capability carries `score_reason`. No opaque models.
-- **No malware in the repo.** No sample is committed or downloaded, and no test requires
-  one. Synthetic fixtures only; the real-APK test is opt-in via `TADORI_TEST_APK`.
+- **No samples in the repo, of any kind.** Nothing is committed or downloaded — not
+  malware, not a benign corpus. Rules are developed against `tadori/fixtures/`; the
+  real-APK test is opt-in via `TADORI_TEST_APK`, and `scripts/fp_bench.py` reads a corpus
+  the user supplies.
+- **Every rule needs a positive fixture.** `tadori rules test --require-coverage` gates
+  CI. `engine.analyze(Subject, …)` exists so fixtures and real scans share one path.
+- **`docs/rule-pack.md` is generated** by `scripts/gen_rule_docs.py`; CI fails if it is
+  stale.
 - **ATT&CK ids are validated.** `attack.py` is generated from the MITRE CTI
   `mobile-attack` STIX bundle; `rules lint` rejects ids outside it.
 

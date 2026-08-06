@@ -96,9 +96,9 @@ a stack of high-severity, externally reachable capabilities reaches the top band
 The score is not a probability and does not pretend to be. Per-rule false-positive rates
 against a benign corpus are the next calibration step (see ROADMAP).
 
-## Testing without malware
+## Testing without samples
 
-No sample is bundled or downloaded. The engine is tested against synthetic fixtures:
+No sample of any kind is bundled or downloaded. Everything is synthetic:
 
 - fake `androguard` objects (`tests/test_features.py`) exercise operand decoding, offset
   accumulation, call-edge filtering and JS-bridge detection
@@ -107,5 +107,16 @@ No sample is bundled or downloaded. The engine is tested against synthetic fixtu
 - text manifests (`tests/test_ingest.py`) exercise component parsing and entry kinds
 - the bundled pack is linted in CI (`tests/test_builtin_rules.py`)
 
-`tests/test_integration.py` runs a full scan when `TADORI_TEST_APK` points at any
-benign APK you have locally.
+**Rule fixtures** (`tadori/fixtures/`) carry the rule pack. A fixture is a synthetic app
+described in YAML — methods, features, call edges, manifest — plus the expectation that
+one rule fires or does not. `tadori.core.fixtures` turns that into an
+`engine.Subject`, the same object `scan` builds from an APK, so a fixture exercises the
+real matcher, the real entry-point discovery and the real reachability analysis; only
+DEX decoding is bypassed. CI requires a positive fixture for every rule.
+
+That refactor — `scan` = ingest + index + `analyze(Subject, …)` — exists precisely so
+that rule tests cannot drift away from what a scan does.
+
+`tests/test_integration.py` runs a full scan when `TADORI_TEST_APK` points at any APK you
+have locally, and `scripts/fp_bench.py` measures per-rule hit rates over a corpus you
+supply. Neither is required, and neither ships data.

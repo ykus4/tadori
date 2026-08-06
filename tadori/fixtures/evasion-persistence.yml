@@ -1,0 +1,208 @@
+# Fixtures for tadori/rules/evasion.yml and persistence.yml.
+---
+fixture:
+  name: two emulator fingerprints in one class
+  rule: TAD-EVAS-0001
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Env;->check()Z"
+        string: ["goldfish", "ranchu"]
+---
+fixture:
+  name: a single generic build string is not an emulator check
+  rule: TAD-EVAS-0001
+  expect: no-match
+  app:
+    methods:
+      - ref: "Lcom/x/Env;->check()Z"
+        string: ["goldfish"]
+---
+fixture:
+  name: su binaries and test-keys probed
+  rule: TAD-EVAS-0002
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Root;->check()Z"
+        string: ["/system/xbin/su", "test-keys"]
+---
+fixture:
+  name: Frida artefacts probed
+  rule: TAD-EVAS-0003
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Hook;->check()Z"
+        string: ["frida", "/proc/self/maps"]
+---
+fixture:
+  name: a component is disabled at runtime
+  rule: TAD-EVAS-0004
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/content/pm/PackageManager;->setComponentEnabledSetting(Landroid/content/ComponentName;II)V"
+---
+fixture:
+  name: device-admin powers used by a declared admin receiver
+  rule: TAD-EVAS-0005
+  expect: match
+  entry_kind: device_admin
+  app:
+    components:
+      - type: receiver
+        name: com.x.Admin
+        permission: android.permission.BIND_DEVICE_ADMIN
+    methods:
+      - ref: "Lcom/x/Admin;->onEnabled(Landroid/content/Context;Landroid/content/Intent;)V"
+        api: ["Landroid/app/admin/DevicePolicyManager;->lockNow()V"]
+---
+fixture:
+  name: lockNow without any device-admin declaration
+  rule: TAD-EVAS-0005
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api: ["Landroid/app/admin/DevicePolicyManager;->lockNow()V"]
+---
+fixture:
+  name: another package is sent to the uninstaller
+  rule: TAD-EVAS-0006
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["android.intent.action.DELETE"]
+---
+fixture:
+  name: a commercial packer runtime is bundled
+  rule: TAD-EVAS-0007
+  expect: match
+  app:
+    native_libs: ["lib/arm64-v8a/libjiagu.so", "lib/arm64-v8a/libapp.so"]
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+---
+fixture:
+  name: an app with ordinary native libraries
+  rule: TAD-EVAS-0007
+  expect: no-match
+  app:
+    native_libs: ["lib/arm64-v8a/libapp.so", "lib/arm64-v8a/libsqlite3.so"]
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+---
+fixture:
+  name: SIM country read before acting
+  rule: TAD-EVAS-0008
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/telephony/TelephonyManager;->getSimCountryIso()Ljava/lang/String;"
+---
+fixture:
+  name: device integrity attestation probed
+  rule: TAD-EVAS-0009
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Guard;->check()V"
+        string: ["com.google.android.play.core.integrity.IntegrityManager"]
+---
+fixture:
+  name: the task is removed from recents
+  rule: TAD-EVAS-0010
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/app/ActivityManager$AppTask;->setExcludeFromRecents(Z)V"
+---
+fixture:
+  name: a receiver registered for BOOT_COMPLETED
+  rule: TAD-PERS-0001
+  expect: match
+  app:
+    components:
+      - type: receiver
+        name: com.x.BootRcv
+        actions: [android.intent.action.BOOT_COMPLETED]
+    methods:
+      - ref: "Lcom/x/BootRcv;->onReceive(Landroid/content/Context;Landroid/content/Intent;)V"
+---
+fixture:
+  name: an app that starts only when launched
+  rule: TAD-PERS-0001
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+---
+fixture:
+  name: a service promotes itself to the foreground
+  rule: TAD-PERS-0002
+  expect: match
+  entry_kind: service
+  app:
+    permissions: [android.permission.FOREGROUND_SERVICE]
+    components:
+      - {type: service, name: com.x.Keep}
+    methods:
+      - ref: "Lcom/x/Keep;->onCreate()V"
+        api:
+          - "Landroid/app/Service;->startForeground(ILandroid/app/Notification;)V"
+---
+fixture:
+  name: periodic work scheduled
+  rule: TAD-PERS-0003
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/app/job/JobScheduler;->schedule(Landroid/app/job/JobInfo;)I"
+---
+fixture:
+  name: two system broadcasts used as a heartbeat
+  rule: TAD-PERS-0004
+  expect: match
+  app:
+    components:
+      - type: receiver
+        name: com.x.Beat
+        actions:
+          - android.intent.action.SCREEN_ON
+          - android.intent.action.USER_PRESENT
+    methods:
+      - ref: "Lcom/x/Beat;->onReceive(Landroid/content/Context;Landroid/content/Intent;)V"
+---
+fixture:
+  name: a native library is loaded
+  rule: TAD-NAT-0001
+  expect: match
+  entry_kind: static_init
+  app:
+    methods:
+      - ref: "Lcom/x/Jni;-><clinit>()V"
+        api: ["Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V"]

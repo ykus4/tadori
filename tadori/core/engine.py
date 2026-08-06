@@ -10,7 +10,8 @@ from pathlib import Path
 from tadori import __version__
 from tadori.core import entrypoints, graph, ingest, libraries, score
 from tadori.core.features import AppIndex, MethodFeatures, build_index
-from tadori.core.models import Capability, Match, ScanResult, Severity
+from tadori.core.ingest import Manifest
+from tadori.core.models import AppInfo, Capability, Match, ScanResult, Severity
 from tadori.core.rules import AppFacts, EvalContext, Rule, load_rules, vocabulary_for
 
 DEFAULT_TIMEOUT = 300.0
@@ -64,6 +65,31 @@ class _ScopeCaches:
         return self.app
 
 
+@dataclass
+class Subject:
+    """One app, ready to be matched — however it was obtained.
+
+    ``scan`` builds this from an APK; the fixture runner builds it from a YAML
+    description, so both take exactly the same matching path.
+    """
+
+    index: AppIndex
+    manifest: Manifest
+    facts: AppFacts
+    info: AppInfo
+    warnings: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_app(cls, app: ingest.LoadedApp, index: AppIndex) -> Subject:
+        return cls(
+            index=index,
+            manifest=app.manifest,
+            facts=_facts(app),
+            info=app.app_info(method_count=index.method_count),
+            warnings=list(app.warnings),
+        )
+
+
 def scan(target: str | Path, options: ScanOptions | None = None) -> ScanResult:
     """Analyze one app and return its capabilities."""
     opts = options or ScanOptions()
@@ -71,18 +97,35 @@ def scan(target: str | Path, options: ScanOptions | None = None) -> ScanResult:
     deadline = started + opts.timeout if opts.timeout else None
 
     rules = opts.rules if opts.rules is not None else load_rules(opts.rule_paths)
-    vocab = vocabulary_for(rules)
 
     opts.note("loading")
     app = ingest.load(target)
 
     opts.note("indexing bytecode")
     index = build_index(
-        app.analysis, vocab, call_graph=opts.reachability, deadline=deadline
+        app.analysis,
+        vocabulary_for(rules),
+        call_graph=opts.reachability,
+        deadline=deadline,
     )
 
-    resolver = entrypoints.discover(app.manifest, index)
-    facts = _facts(app)
+    return analyze(Subject.from_app(app, index), rules, opts, started=started)
+
+
+def analyze(
+    subject: Subject,
+    rules: list[Rule],
+    opts: ScanOptions | None = None,
+    *,
+    started: float | None = None,
+) -> ScanResult:
+    """Match rules against a prepared subject and score the result."""
+    opts = opts or ScanOptions()
+    started = started if started is not None else time.monotonic()
+    deadline = started + opts.timeout if opts.timeout else None
+
+    index = subject.index
+    resolver = entrypoints.discover(subject.manifest, index)
     caches = _ScopeCaches(index=index)
 
     opts.note(f"matching {len(rules)} rules")
@@ -91,18 +134,20 @@ def scan(target: str | Path, options: ScanOptions | None = None) -> ScanResult:
     for rule in rules:
         if rule.severity.rank < opts.min_severity.rank:
             continue
-        found = _apply(rule, index, caches, facts, resolver, opts, deadline, stats)
+        found = _apply(
+            rule, index, caches, subject.facts, resolver, opts, deadline, stats
+        )
         if found is not None:
             capabilities.append(found)
 
     result = ScanResult(
-        app=app.app_info(method_count=index.method_count),
+        app=subject.info,
         capabilities=capabilities,
         entry_points=resolver.declared,
         rules_evaluated=len(rules),
         scanned_at=datetime.now(UTC).isoformat(timespec="seconds"),
         duration_sec=time.monotonic() - started,
-        warnings=list(app.warnings),
+        warnings=list(subject.warnings),
         tadori_version=__version__,
         library_matches_hidden=stats.library_hidden,
     )

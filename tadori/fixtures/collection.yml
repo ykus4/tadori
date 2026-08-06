@@ -1,0 +1,249 @@
+# Fixtures for tadori/rules/collection.yml, remote-access.yml and impact.yml.
+---
+fixture:
+  name: screen capture is started
+  rule: TAD-COLL-0001
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/media/projection/MediaProjectionManager;->createScreenCaptureIntent()Landroid/content/Intent;"
+---
+fixture:
+  name: microphone recording with the audio permission
+  rule: TAD-COLL-0002
+  expect: match
+  app:
+    permissions: [android.permission.RECORD_AUDIO]
+    components:
+      - {type: service, name: com.x.Rec}
+    methods:
+      - ref: "Lcom/x/Rec;->onCreate()V"
+        api: ["Landroid/media/MediaRecorder;->setAudioSource(I)V"]
+---
+fixture:
+  name: audio APIs without the record permission
+  rule: TAD-COLL-0002
+  expect: no-match
+  app:
+    components:
+      - {type: service, name: com.x.Rec}
+    methods:
+      - ref: "Lcom/x/Rec;->onCreate()V"
+        api: ["Landroid/media/MediaRecorder;->setAudioSource(I)V"]
+---
+fixture:
+  name: contacts provider queried
+  rule: TAD-COLL-0003
+  expect: match
+  app:
+    permissions: [android.permission.READ_CONTACTS]
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["content://com.android.contacts/data/phones"]
+---
+fixture:
+  name: call log read
+  rule: TAD-COLL-0004
+  expect: match
+  app:
+    permissions: [android.permission.READ_CALL_LOG]
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["content://call_log/calls"]
+---
+fixture:
+  name: location updates requested
+  rule: TAD-COLL-0005
+  expect: match
+  app:
+    permissions: [android.permission.ACCESS_FINE_LOCATION]
+    components:
+      - {type: service, name: com.x.Track}
+    methods:
+      - ref: "Lcom/x/Track;->onCreate()V"
+        api:
+          - "Landroid/location/LocationManager;->requestLocationUpdates(Ljava/lang/String;JF)V"
+---
+fixture:
+  name: installed packages listed
+  rule: TAD-COLL-0006
+  expect: match
+  app:
+    permissions: [android.permission.QUERY_ALL_PACKAGES]
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/content/pm/PackageManager;->getInstalledPackages(I)Ljava/util/List;"
+---
+fixture:
+  name: device identifiers read
+  rule: TAD-COLL-0007
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/telephony/TelephonyManager;->getSubscriberId()Ljava/lang/String;"
+---
+fixture:
+  name: calendar entries read
+  rule: TAD-COLL-0008
+  expect: match
+  app:
+    permissions: [android.permission.READ_CALENDAR]
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        string: ["content://com.android.calendar/events"]
+---
+fixture:
+  name: camera opened from a background service
+  rule: TAD-COLL-0009
+  expect: match
+  entry_kind: service
+  app:
+    permissions: [android.permission.CAMERA]
+    components:
+      - {type: service, name: com.x.Cam}
+    methods:
+      - ref: "Lcom/x/Cam;->onCreate()V"
+        api:
+          - "Landroid/hardware/camera2/CameraManager;->openCamera(Ljava/lang/String;)V"
+---
+fixture:
+  name: shared storage walked and read
+  rule: TAD-COLL-0010
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Steal;->root()Ljava/io/File;"
+        api:
+          - "Landroid/os/Environment;->getExternalStorageDirectory()Ljava/io/File;"
+      - ref: "Lcom/x/Steal;->walk()V"
+        api: ["Ljava/io/File;->listFiles()[Ljava/io/File;"]
+      - ref: "Lcom/x/Steal;->read()[B"
+        api: ["Ljava/io/FileInputStream;-><init>(Ljava/io/File;)V"]
+---
+fixture:
+  name: listing storage without reading anything back
+  rule: TAD-COLL-0010
+  expect: no-match
+  app:
+    methods:
+      - ref: "Lcom/x/Steal;->walk()V"
+        api:
+          - "Landroid/os/Environment;->getExternalStorageDirectory()Ljava/io/File;"
+          - "Ljava/io/File;->listFiles()[Ljava/io/File;"
+---
+fixture:
+  name: screen capture piped to a socket
+  rule: TAD-RAT-0001
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Vnc;->capture()V"
+        api:
+          - "Landroid/media/projection/MediaProjection;->createVirtualDisplay(Ljava/lang/String;)V"
+      - ref: "Lcom/x/Vnc;->stream()V"
+        api: ["Ljava/net/Socket;->getOutputStream()Ljava/io/OutputStream;"]
+---
+fixture:
+  name: screen capture that never leaves the device
+  rule: TAD-RAT-0001
+  expect: no-match
+  app:
+    methods:
+      - ref: "Lcom/x/Shot;->capture()V"
+        api:
+          - "Landroid/media/projection/MediaProjection;->createVirtualDisplay(Ljava/lang/String;)V"
+          - "Ljava/io/FileOutputStream;->write([B)V"
+---
+fixture:
+  name: three separate packages probed by name
+  rule: TAD-DISC-0001
+  expect: match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/content/pm/PackageManager;->getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;"
+          - "Landroid/content/pm/PackageManager;->getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;"
+          - "Landroid/content/pm/PackageManager;->getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;"
+---
+fixture:
+  name: an app checking for its own companion package
+  rule: TAD-DISC-0001
+  expect: no-match
+  app:
+    components:
+      - {type: activity, name: com.x.Main, actions: [android.intent.action.MAIN]}
+    methods:
+      - ref: "Lcom/x/Main;->onCreate(Landroid/os/Bundle;)V"
+        api:
+          - "Landroid/content/pm/PackageManager;->getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;"
+---
+fixture:
+  name: data archived and posted from the same class
+  rule: TAD-EXF-0001
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Pack;->zip()V"
+        api:
+          - "Ljava/util/zip/ZipOutputStream;->putNextEntry(Ljava/util/zip/ZipEntry;)V"
+      - ref: "Lcom/x/Pack;->upload()V"
+        api:
+          - "Ljava/net/HttpURLConnection;->getOutputStream()Ljava/io/OutputStream;"
+---
+fixture:
+  name: files walked, encrypted and overwritten
+  rule: TAD-IMP-0001
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Locker;->walk()V"
+        api: ["Ljava/io/File;->listFiles()[Ljava/io/File;"]
+      - ref: "Lcom/x/Locker;->encrypt()V"
+        api: ["Ljavax/crypto/CipherOutputStream;-><init>(Ljava/io/OutputStream;)V"]
+      - ref: "Lcom/x/Locker;->cleanup()V"
+        api: ["Ljava/io/File;->delete()Z"]
+---
+fixture:
+  name: clipboard wallet address rewritten
+  rule: TAD-IMP-0002
+  expect: match
+  app:
+    methods:
+      - ref: "Lcom/x/Clip;->watch()V"
+        api:
+          - "Landroid/content/ClipboardManager;->addPrimaryClipChangedListener(Landroid/content/ClipboardManager$OnPrimaryClipChangedListener;)V"
+      - ref: "Lcom/x/Clip;->swap()V"
+        api:
+          - "Landroid/content/ClipboardManager;->setPrimaryClip(Landroid/content/ClipData;)V"
+        string: ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
+---
+fixture:
+  name: a wallet app that only reads the clipboard
+  rule: TAD-IMP-0002
+  expect: no-match
+  app:
+    methods:
+      - ref: "Lcom/x/Clip;->paste()V"
+        api:
+          - "Landroid/content/ClipboardManager;->getPrimaryClip()Landroid/content/ClipData;"
+        string: ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]

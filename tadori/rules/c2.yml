@@ -52,13 +52,14 @@ rule:
 rule:
   meta:
     id: TAD-C2-0004
-    name: raw socket to a hardcoded host and port
+    name: speak a custom protocol over a raw TCP socket
     scope: class
-    severity: medium
+    severity: low
     attack: [T1509, T1646]
     description: >
-      Opens a TCP socket directly instead of going through HTTP. Used by
-      remote-access modules for screen streaming and interactive control.
+      Opens a TCP socket and writes to it rather than going through HTTP.
+      Remote-access modules do this for interactive control — and so does any
+      app with its own protocol, so treat it as context, not as a finding.
     references:
       - https://attack.mitre.org/techniques/T1509/
   features:
@@ -93,3 +94,43 @@ rule:
         - api: "Landroid/telephony/TelephonyManager;->getLine1Number"
         - api: "Landroid/accounts/AccountManager;->getAccounts"
         - field: "Landroid/os/Build;->SERIAL"
+---
+rule:
+  meta:
+    id: TAD-C2-0006
+    name: WebSocket command channel
+    scope: method
+    severity: medium
+    attack: [T1481.002, T1437]
+    description: >
+      Holds a bidirectional WebSocket open. Common in chat and trading apps, and
+      equally common as an interactive C2 for device-takeover modules.
+    references:
+      - https://attack.mitre.org/techniques/T1481/002/
+  features:
+    - or:
+        - api: "Lokhttp3/OkHttpClient;->newWebSocket"
+        - api: "Ljavax/websocket/WebSocketContainer;->connectToServer"
+        - api: "Lorg/java_websocket/client/WebSocketClient;->connect"
+        - substring: "wss://"
+---
+rule:
+  meta:
+    id: TAD-C2-0007
+    name: dead-drop resolver on a public paste or repo host
+    scope: method
+    severity: high
+    attack: [T1481.001]
+    description: >
+      Fetches its real C2 address from a paste site, a raw file in a public
+      repository or a Telegram channel — infrastructure that survives takedowns
+      of the payload itself.
+    references:
+      - https://attack.mitre.org/techniques/T1481/001/
+  features:
+    - or:
+        - substring: "pastebin.com/raw"
+        - substring: "gist.githubusercontent.com"
+        - substring: "raw.githubusercontent.com"
+        - substring: "pastee.org"
+        - substring: "hastebin.com/raw"

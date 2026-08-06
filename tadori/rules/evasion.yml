@@ -155,3 +155,61 @@ rule:
         - native_lib: "*libmobisec*"
         - native_lib: "*libnesec*"
         - native_lib: "*libAPKProtect*"
+---
+rule:
+  meta:
+    id: TAD-EVAS-0008
+    name: gate behaviour on the SIM or network country
+    scope: method
+    severity: medium
+    attack: [T1627.001]
+    description: >
+      Reads the SIM or network country before deciding what to do. Campaigns use
+      this to fire only in targeted countries — and to stay dormant in the
+      analyst's.
+    references:
+      - https://attack.mitre.org/techniques/T1627/001/
+  features:
+    - or:
+        - api: "Landroid/telephony/TelephonyManager;->getSimCountryIso"
+        - api: "Landroid/telephony/TelephonyManager;->getNetworkCountryIso"
+        - api: "Landroid/telephony/TelephonyManager;->getSimOperator"
+        - api: "Landroid/telephony/TelephonyManager;->getNetworkOperatorName"
+---
+rule:
+  meta:
+    id: TAD-EVAS-0009
+    name: probe device-integrity attestation
+    scope: class
+    severity: medium
+    attack: [T1633, T1632]
+    description: >
+      Calls Play Integrity or SafetyNet. Legitimate anti-fraud SDKs do this; so
+      does malware that wants to know whether it is running somewhere it should
+      stay quiet.
+    references:
+      - https://attack.mitre.org/techniques/T1633/
+  features:
+    - or:
+        - substring: "com.google.android.play.core.integrity"
+        - substring: "SafetyNet"
+        - api: "Lcom/google/android/gms/safetynet/SafetyNetClient;->attest"
+        - substring: "IntegrityManager"
+---
+rule:
+  meta:
+    id: TAD-EVAS-0010
+    name: hide the running task from the recents screen
+    scope: method
+    severity: medium
+    attack: [T1628]
+    description: >
+      Removes its own task from the recents list at runtime, so the user cannot
+      see — or swipe away — what is running. (``moveTaskToBack`` alone is not
+      enough: that is ordinary back-button handling.)
+    references:
+      - https://attack.mitre.org/techniques/T1628/
+  features:
+    # Activity.finishAndRemoveTask is deliberately absent: closing your own task
+    # is what an ordinary "exit" or "log out" button does.
+    - api: "Landroid/app/ActivityManager$AppTask;->setExcludeFromRecents"

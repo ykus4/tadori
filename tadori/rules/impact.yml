@@ -1,0 +1,48 @@
+# Impact: destroying, encrypting or rewriting the user's data.
+---
+rule:
+  meta:
+    id: TAD-IMP-0001
+    name: encrypt user files in place
+    scope: class
+    severity: high
+    attack: [T1471]
+    description: >
+      Walks files and rewrites them through a cipher. Ransomware; a backup tool
+      that encrypts to a *new* location will not delete or overwrite the source.
+    references:
+      - https://attack.mitre.org/techniques/T1471/
+  features:
+    - or:
+        - api: "Ljavax/crypto/CipherOutputStream;-><init>"
+        - api: "Ljavax/crypto/Cipher;->doFinal"
+    - api: "Ljava/io/File;->listFiles"
+    - or:
+        - api: "Ljava/io/File;->delete"
+        - api: "Ljava/io/File;->renameTo"
+        - api: "Ljava/io/FileOutputStream;->write"
+---
+rule:
+  meta:
+    id: TAD-IMP-0002
+    name: rewrite a cryptocurrency address on the clipboard
+    scope: class
+    severity: high
+    attack: [T1641, T1414]
+    description: >
+      Reads the clipboard, recognises a wallet address, and writes a different
+      one back — the clipper pattern. Payment goes to the attacker and the user
+      sees a plausible address.
+    references:
+      - https://attack.mitre.org/techniques/T1641/
+  features:
+    - or:
+        - api: "Landroid/content/ClipboardManager;->getPrimaryClip"
+        - api: "Landroid/content/ClipboardManager;->addPrimaryClipChangedListener"
+    - api: "Landroid/content/ClipboardManager;->setPrimaryClip"
+    - or:
+        - regex: "/^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}$/"
+        - regex: "/^0x[a-fA-F0-9]{40}$/"
+        - regex: "/^T[A-Za-z1-9]{33}$/"
+        - substring: "bitcoin:"
+        - substring: "ethereum:"

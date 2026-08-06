@@ -17,10 +17,8 @@ TAD-CRED-0001  read notifications, including one-time codes  [HIGH]  T1517
 ## Quick start
 
 ```bash
-git clone https://github.com/ykus4/tadori.git
-cd tadori
-uv sync
-uv run tadori scan app.apk
+pip install tadori     # Python 3.13+
+tadori scan app.apk
 ```
 
 ## Commands
@@ -29,19 +27,20 @@ uv run tadori scan app.apk
 |---|---|
 | `tadori scan APP` | capability report; `-f text\|json\|sarif\|html`, `--fail-on high` |
 | `tadori explain RULE APP` | why one rule fired, with full call chains |
-| `tadori rules list\|show\|lint` | inspect and validate the rule pack |
+| `tadori rules list\|show\|lint\|test` | inspect, validate and fixture-test the rule pack |
 | `tadori diff OLD NEW` | what a newer build of the same app gained |
 
 Inputs: `.apk`, a bare `.dex`, or a directory of `classes*.dex`.
 
 ## Read next
 
-- [Rule reference](rules.md) — every feature key, combinator and scope
+- [Rule pack](rule-pack.md) — all 58 rules, grouped by ATT&CK tactic
+- [Writing rules](rules.md) — every feature key, combinator, scope and fixture field
 - [Design notes](design.md) — how the single bytecode walk, entry-point discovery and
   reachability analysis work, and where their precision ends
 - [Roadmap](ROADMAP.md)
 
 !!! warning "The score is not a verdict"
-    tadori reports capability and exposure. A benign app store scores 43/100 because it
+    tadori reports capability and exposure. A benign app store scores 38/100 because it
     genuinely installs APKs and enumerates packages. Read the evidence and the call
     paths, not the number.

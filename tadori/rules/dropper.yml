@@ -113,3 +113,29 @@ rule:
             value: ">=2"
         - api: "Ljava/lang/Class;->getDeclaredMethod"
         - api: "Ljava/lang/reflect/Method;->setAccessible"
+---
+rule:
+  meta:
+    id: TAD-DROP-0006
+    name: download an executable payload to app storage
+    scope: class
+    severity: high
+    attack: [T1544, T1407]
+    description: >
+      Fetches a file over the network and writes it somewhere the app can load
+      or install from — the stage between "dropper" and "second stage".
+    references:
+      - https://attack.mitre.org/techniques/T1544/
+  features:
+    - or:
+        - api: "Ljava/net/URL;->openStream"
+        - api: "Ljava/net/HttpURLConnection;->getInputStream"
+        - api: "Lokhttp3/ResponseBody;->byteStream"
+    - or:
+        - api: "Ljava/io/FileOutputStream;->write"
+        - api: "Ljava/io/FileOutputStream;-><init>"
+    - or:
+        - substring: ".apk"
+        - substring: ".dex"
+        - substring: ".jar"
+        - substring: ".so"

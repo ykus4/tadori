@@ -34,10 +34,19 @@ jobs:
         run: uv run pytest -q
 
       - name: Validate the bundled rule pack
-        run: uv run tadori rules lint
+        run: |
+          uv run tadori rules lint
+          uv run tadori rules test --require-coverage
 
       - name: CLI smoke test
         run: |
           uv run tadori --version
           uv run tadori rules list
           uv run tadori rules show TAD-ACCS-0001
+
+      - name: Docs build and generated pages are current
+        run: |
+          uv sync --group docs
+          uv run python scripts/gen_rule_docs.py --out docs/rule-pack.md
+          git diff --exit-code docs/rule-pack.md
+          uv run mkdocs build --strict

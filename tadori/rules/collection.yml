@@ -129,3 +129,60 @@ rule:
         - api: "Landroid/telephony/TelephonyManager;->getSimSerialNumber"
         - api: "Landroid/telephony/TelephonyManager;->getLine1Number"
         - field: "Landroid/os/Build;->SERIAL"
+---
+rule:
+  meta:
+    id: TAD-COLL-0008
+    name: read calendar entries
+    scope: method
+    severity: low
+    attack: [T1636.001]
+    description: Reads calendar events, which leak travel, meetings and contacts.
+    references:
+      - https://attack.mitre.org/techniques/T1636/001/
+  features:
+    - or:
+        - substring: "content://com.android.calendar"
+        - type: "Landroid/provider/CalendarContract$Events"
+    - permission: android.permission.READ_CALENDAR
+---
+rule:
+  meta:
+    id: TAD-COLL-0009
+    name: capture photos or video from the camera
+    scope: method
+    severity: high
+    attack: [T1512]
+    description: >
+      Opens the camera from code. Benign in a camera app; in anything else,
+      combined with a background trigger, it is covert capture.
+    references:
+      - https://attack.mitre.org/techniques/T1512/
+  features:
+    - or:
+        - api: "Landroid/hardware/camera2/CameraManager;->openCamera"
+        - api: "Landroid/hardware/Camera;->open"
+        - api: "Landroidx/camera/lifecycle/ProcessCameraProvider;->bindToLifecycle"
+    - permission: android.permission.CAMERA
+---
+rule:
+  meta:
+    id: TAD-COLL-0010
+    name: harvest files from shared storage
+    scope: class
+    severity: medium
+    attack: [T1533]
+    description: >
+      Walks external storage and reads what it finds. Document stealers and
+      wallet-seed hunters look exactly like this.
+    references:
+      - https://attack.mitre.org/techniques/T1533/
+  features:
+    - or:
+        - api: "Landroid/os/Environment;->getExternalStorageDirectory"
+        - api: "Landroid/os/Environment;->getExternalStoragePublicDirectory"
+        - substring: "/storage/emulated/0"
+    - api: "Ljava/io/File;->listFiles"
+    - or:
+        - api: "Ljava/io/FileInputStream;-><init>"
+        - api: "Ljava/nio/file/Files;->readAllBytes"

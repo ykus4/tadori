@@ -6,6 +6,9 @@ __pycache__/
 build/
 dist/
 
+# generated docs site
+site/
+
 # tooling caches
 .pytest_cache/
 .ruff_cache/

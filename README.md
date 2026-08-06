@@ -39,10 +39,30 @@ TAD-CRED-0001  read notifications, including one-time codes  [HIGH]  T1517
 ## Install
 
 ```bash
+pip install tadori           # Python 3.13+
+tadori scan app.apk
+```
+
+From source:
+
+```bash
 git clone https://github.com/ykus4/tadori.git
 cd tadori
-uv sync                      # requires uv + Python 3.13+
+uv sync
 uv run tadori scan app.apk
+```
+
+In CI, as a GitHub Action:
+
+```yaml
+- uses: ykus4/tadori@v0
+  with:
+    apk: app/build/outputs/apk/release/app-release.apk
+    baseline: previous-release.apk   # optional: also run `tadori diff`
+    fail-on: high
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: tadori.sarif
 ```
 
 ## Use
@@ -57,6 +77,7 @@ tadori scan app.apk --fail-on high        # CI gate
 tadori explain TAD-ACCS-0001 app.apk      # why a rule fired (or did not)
 tadori rules list                         # what ships in the pack
 tadori rules lint                         # validate rule metadata
+tadori rules test                         # run the rule fixtures
 
 tadori diff old.apk new.apk               # what did this update gain?
 ```
@@ -129,10 +150,41 @@ rule:
     max_hops: 6
 ```
 
-Features and combinators: [`docs/rules.md`](docs/rules.md). The pack currently covers
-accessibility abuse (on-device ATS fraud), overlay phishing, notification and SMS
-credential theft, droppers and runtime code loading, C2 channels, collection, analysis
-evasion and persistence.
+Features and combinators: [`docs/rules.md`](docs/rules.md). The full pack — **58 rules**
+covering accessibility abuse (on-device ATS fraud), overlay phishing, notification and
+SMS credential theft, droppers and runtime code loading, C2 channels, remote access,
+collection, exfiltration, impact, analysis evasion and persistence — is listed in
+[`docs/rule-pack.md`](docs/rule-pack.md).
+
+### Every rule is pinned by a fixture
+
+A fixture is a synthetic app in YAML — a few methods, their features, a manifest — plus
+the expectation that one rule does or does not fire on it. Fixtures run through the real
+matcher and the real reachability analysis, so they catch a rule that stops firing *and*
+a rule that starts firing on innocent code:
+
+```yaml
+fixture:
+  name: SMS parsing only reachable from application startup, not from a receiver
+  rule: TAD-CRED-0002
+  expect: no-match
+  app:
+    permissions: [android.permission.RECEIVE_SMS]
+    application_class: com.x.App
+    methods:
+      - ref: "Lcom/x/App;->onCreate()V"
+        calls: ["Lcom/x/Helper;->parse()V"]
+      - ref: "Lcom/x/Helper;->parse()V"
+        api: ["Landroid/telephony/SmsMessage;->getMessageBody()Ljava/lang/String;"]
+```
+
+```
+$ tadori rules test
+78 fixtures (59 positive, 19 negative) · 58 rules · 78/78 passed
+```
+
+CI requires a positive fixture for every rule, so no sample — benign or otherwise — is
+needed to develop the pack.
 
 Writing a rule: [`CONTRIBUTING.md`](CONTRIBUTING.md). `tadori rules lint` runs in CI and
 rejects unknown ATT&CK ids, duplicate rule ids and missing metadata.
@@ -140,7 +192,7 @@ rejects unknown ATT&CK ids, duplicate rule ids and missing metadata.
 ## Honest limitations
 
 - **The score is a capability-risk score, not a malware verdict.** F-Droid 2.0-rc0 — a
-  benign app store — scores 43/100 ("suspicious"), because it genuinely installs APKs,
+  benign app store — scores 38/100 ("suspicious"), because it genuinely installs APKs,
   tracks the foreground app and enumerates packages. Read the evidence, not the number.
 - **Library filtering is a heuristic.** Matches inside a curated list of well-known
   libraries (AndroidX, Kotlin, OkHttp, …) are hidden by default and reported as a count;
@@ -152,14 +204,18 @@ rejects unknown ATT&CK ids, duplicate rule ids and missing metadata.
   `DexClassLoader` payloads are reported as capabilities, not followed.
 - **Packed and native code.** If `TAD-EVAS-0007` or `TAD-NAT-0001` fires, part of the
   behaviour lives outside the DEX and this tool cannot see it.
-- **No false-positive benchmark yet.** Per-rule FP rates measured against a benign
-  corpus are on the [roadmap](ROADMAP.md), not in this release.
+- **No published false-positive numbers.** `scripts/fp_bench.py` measures per-rule hit
+  rates over a corpus of apps *you* supply and writes a markdown/JSON table; this project
+  deliberately downloads and bundles no APKs, so there is no published corpus run yet.
+  Calibration so far rests on the rule fixtures plus spot checks against apps kept
+  outside the repository.
 
 ## Scope and intent
 
 For defensive analysis, triage and research — understanding what an app can do, and
-proving it with evidence. No malware sample is bundled or downloaded by this project,
-and no test requires one.
+proving it with evidence. **No sample of any kind is bundled or downloaded by this
+project**: the rule pack is developed against synthetic fixtures, the test suite needs no
+APK, and the benchmark script only ever reads a corpus you already have.
 
 ## License
 

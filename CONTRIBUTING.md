@@ -25,14 +25,19 @@ TADORI_TEST_APK=/path/to/benign.apk uv run pytest tests/test_integration.py -q
 3. Write the condition. Prefer prefix `api:` patterns over full signatures — they survive
    SDK changes. See [`docs/rules.md`](docs/rules.md) for every feature key.
 4. Add `reachable_from` when the capability only matters from certain entry points.
-5. Validate:
+5. **Add a fixture** in `tadori/fixtures/` — a synthetic app plus the expectation. CI
+   requires at least one `expect: match` fixture per rule, and a matching
+   `expect: no-match` is what stops the rule drifting later. The fixture format is
+   documented in [`docs/rules.md`](docs/rules.md#fixtures).
+6. Validate:
 
    ```bash
    uv run tadori rules lint
-   uv run pytest tests/test_builtin_rules.py -q
+   uv run tadori rules test --require-coverage
+   uv run pytest -q
    ```
 
-6. Try it on a real app and read the call paths:
+7. Try it on a real app and read the call paths:
 
    ```bash
    uv run tadori explain TAD-YOUR-0001 some.apk
@@ -52,6 +57,8 @@ TADORI_TEST_APK=/path/to/benign.apk uv run pytest tests/test_integration.py -q
 - **Map to ATT&CK Mobile.** CI rejects ids that are not in the matrix.
 - **Check it against a benign app first.** If a well-known app trips your rule, either
   tighten it or explain the benign case in the description and drop the severity.
+  `python scripts/fp_bench.py --corpus <dir>` does this over a whole directory of apps
+  you already have. Two rules in the current pack were tightened this way.
 
 ### Anti-patterns
 
@@ -62,8 +69,9 @@ TADORI_TEST_APK=/path/to/benign.apk uv run pytest tests/test_integration.py -q
 
 ## Changing the engine
 
-- Keep public behaviour covered by a synthetic fixture; do not add sample APKs to the
-  repository, and do not add tests that require a malware sample.
+- Keep public behaviour covered by a synthetic fixture. **Do not add APKs — of any kind,
+  benign included — to the repository**, and do not add a test that needs one. If you
+  want end-to-end coverage, point `TADORI_TEST_APK` at a file outside the repo.
 - If you change matching or reachability semantics, say so in `docs/design.md` — the
   precision trade-offs there are the reason people can trust the output.
 - Run a scan on a real app before and after: a change that alters the score of a known
