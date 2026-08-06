@@ -16,6 +16,11 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    outputs:
+      pages-enabled: ${{ steps.pages.outputs.enabled }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,8 +39,24 @@ jobs:
         with:
           path: site
 
+      - name: Is GitHub Pages enabled for this repository?
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Deploying to Pages that were never enabled fails with a bare 404,
+          # which would make every docs push look broken. Check first and say so.
+          if gh api "repos/${{ github.repository }}/pages" --silent 2>/dev/null; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Pages not enabled::The site built fine but was not \
+            deployed. Enable it at Settings → Pages with Source: GitHub Actions."
+          fi
+
   deploy:
     needs: build
+    if: needs.build.outputs.pages-enabled == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
