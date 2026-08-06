@@ -64,7 +64,14 @@
     {% if result.app.version_name %}<span class="mono">{{ result.app.version_name }}</span>{% endif %}
   </h1>
   <p class="sub mono">{{ result.app.name }} · {{ "{:,}".format(result.app.method_count) }} methods ·
-    {{ result.app.dex_count }} dex{% if result.app.signed %} · signed {{ result.app.signed }}{% endif %}</p>
+    {{ result.app.dex_count }} dex{% if result.app.signed %} · signed {{ result.app.signed }}{% endif %}
+    {%- if result.app.debug_signed %} (debug key){% endif %}
+    {%- if result.app.frameworks %} · {{ result.app.frameworks | join(", ") }}{% endif %}</p>
+  {% if result.app.certificate_subject %}
+  <p class="sub mono">signer {{ result.app.certificate_subject }}
+    {%- if result.app.certificate_not_after %} · valid to {{ result.app.certificate_not_after[:10] }}{% endif %}
+    {%- if result.app.certificate_sha256 %} · {{ result.app.certificate_sha256[:16] }}…{% endif %}</p>
+  {% endif %}
 
   <div class="score {{ score_class }}">
     <b>{{ "%g"|format(result.score) }}</b><span>/ 100</span>

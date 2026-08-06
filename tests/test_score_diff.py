@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from tadori.core import diff, score
 from tadori.core.models import (
     AppInfo,
@@ -165,3 +169,63 @@ def test_new_native_libraries_are_reported():
     new = result(native_libs=["lib/arm64-v8a/libapp.so", "lib/arm64-v8a/libjiagu.so"])
     delta = diff.compare(old, new)
     assert delta.added_native_libs == ["lib/arm64-v8a/libjiagu.so"]
+
+
+# ---------------------------------------------------------------------------
+# stored baselines
+# ---------------------------------------------------------------------------
+
+
+def test_scan_result_survives_a_json_round_trip():
+    original = result(
+        capability("TAD-RT-0001", sites=2),
+        permissions=["android.permission.READ_SMS"],
+        package="com.x",
+        version_name="1.4.0",
+        certificate_sha256="c" * 64,
+    )
+    original.entry_points = [REMOTE]
+    original.warnings = ["a warning"]
+
+    restored = ScanResult.from_dict(json.loads(json.dumps(original.to_dict())))
+
+    assert restored.to_dict() == original.to_dict()
+    assert restored.capabilities[0].exposure == original.capabilities[0].exposure
+    assert restored.entry_points[0].kind is EntryKind.EXPORTED_RECEIVER
+    assert restored.capabilities[0].matches[0].best_path.hops == 1
+
+
+def test_baseline_diffs_the_same_way_as_two_scans(tmp_path):
+    old = result(capability("TAD-KEEP-0001", severity=Severity.LOW))
+    new = result(
+        capability("TAD-KEEP-0001", severity=Severity.LOW),
+        capability("TAD-NEW-0001", severity=Severity.HIGH),
+    )
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps(old.to_dict()))
+
+    delta = diff.compare(diff.load_baseline(baseline), new)
+    assert diff.is_baseline(baseline) and not diff.is_baseline(tmp_path / "app.apk")
+    assert [c.rule_id for c in delta.added] == ["TAD-NEW-0001"]
+    assert delta.is_regression()
+
+
+def test_baseline_rejects_files_that_are_not_scan_results(tmp_path):
+    junk = tmp_path / "junk.json"
+    junk.write_text('{"hello": "world"}')
+    with pytest.raises(ValueError, match="not a tadori scan result"):
+        diff.load_baseline(junk)
+
+    broken = tmp_path / "broken.json"
+    broken.write_text("{oops")
+    with pytest.raises(ValueError, match="not valid JSON"):
+        diff.load_baseline(broken)
+
+
+def test_baseline_from_a_stranger_version_names_the_bad_field(tmp_path):
+    data = result(capability()).to_dict()
+    data["entry_points"] = [{"method": "Lcom/x/A;->f()V", "kind": "quantum_receiver"}]
+    path = tmp_path / "future.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="unknown entry-point kind"):
+        diff.load_baseline(path)

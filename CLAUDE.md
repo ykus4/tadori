@@ -16,6 +16,7 @@ Requires [uv](https://docs.astral.sh/uv/). Python 3.13+.
 ```bash
 uv sync                              # install
 uv run tadori scan app.apk           # scan
+uv run tadori triage ~/samples       # rank a directory of apps
 uv run tadori explain TAD-ACCS-0001 app.apk
 uv run tadori rules lint             # validate the bundled pack
 uv run tadori rules test             # run the rule fixtures
@@ -28,7 +29,7 @@ TADORI_TEST_APK=/path/app.apk uv run pytest tests/test_integration.py -q
 
 ```
 tadori/
-├── cli.py                 ← click CLI: scan / explain / rules / diff
+├── cli.py                 ← click CLI: scan / triage / explain / rules / diff
 ├── rules/*.yml            ← the bundled rule pack, grouped by area
 ├── fixtures/*.yml         ← synthetic apps pinning each rule's behaviour
 ├── templates/             ← jinja2 HTML report
@@ -39,14 +40,18 @@ tadori/
     ├── entrypoints.py     ← entry-point discovery and classification
     ├── graph.py           ← reverse BFS from a match to an entry point
     ├── rules.py           ← YAML rule format: parse, evaluate, lint
-    ├── engine.py          ← orchestration: load → index → Subject → analyze → score
+    ├── loading.py         ← YAML pack loading shared by rules.py and fixtures.py
+    ├── engine.py          ← orchestration: load → index → Subject → analyze → score,
+    │                        plus `diagnose` (why a rule did not fire)
+    ├── batch.py           ← scanning a corpus: `tadori triage`, scripts/fp_bench.py
     ├── fixtures.py        ← builds a Subject from a fixture YAML (no DEX involved)
     ├── libraries.py       ← app-code vs bundled-library provenance
     ├── score.py           ← transparent weighted score
     ├── diff.py            ← version-to-version capability diff
-    ├── report.py          ← text / JSON / SARIF / HTML
+    ├── report.py          ← text / JSON / SARIF / HTML / DOT / Mermaid
     ├── attack.py          ← generated ATT&CK Mobile technique table
     └── models.py          ← Severity, EntryKind, Evidence, CallPath, Match, Capability
+                             (also the one `exposure` vocabulary score/diff share)
 ```
 
 ## Invariants worth preserving
@@ -60,6 +65,10 @@ tadori/
 - **The polymorphic cut** in `graph.POLYMORPHIC_LIMIT` is load-bearing. Removing it
   fabricates call chains between unrelated components.
 - **Score stays explainable.** Every capability carries `score_reason`. No opaque models.
+- **One exposure vocabulary.** `Capability.exposure` (`models.EXPOSURE_ORDER`) is what the
+  score, the diff and the terminal all read. Do not re-derive it per module.
+- **SARIF fingerprints are rule id + method only.** Anything build-specific in there
+  re-opens every code-scanning alert on each release.
 - **No samples in the repo, of any kind.** Nothing is committed or downloaded — not
   malware, not a benign corpus. Rules are developed against `tadori/fixtures/`; the
   real-APK test is opt-in via `TADORI_TEST_APK`, and `scripts/fp_bench.py` reads a corpus

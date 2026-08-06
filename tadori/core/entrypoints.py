@@ -8,6 +8,7 @@ from framework callback overrides.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 
 from tadori.core.features import AppIndex
@@ -161,7 +162,5 @@ def _register_class(resolver: EntryPointResolver, cls: str, kind: EntryKind) -> 
 
 
 def entry_kind_counts(resolver: EntryPointResolver) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for entry in resolver.declared:
-        counts[entry.kind.value] = counts.get(entry.kind.value, 0) + 1
+    counts = Counter(entry.kind.value for entry in resolver.declared)
     return dict(sorted(counts.items()))

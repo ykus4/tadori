@@ -77,6 +77,8 @@ to detect an override, since a subclass never invokes the callback it overrides.
 | `file` | a path inside the APK | glob, e.g. `assets/*.dex` |
 | `native_lib` | a bundled `.so` | glob, e.g. `*libjiagu*` |
 | `metadata` | an application/component `meta-data` name, or `name=value` | glob |
+| `exported` | an exported component: `provider`, or `provider:unprotected` / `provider:protected` | `unprotected` means no `android:permission` guards it; `*` matches any type |
+| `manifest` | an `<application>` attribute, or `name=value` | glob; `debuggable`, `allowBackup`, `usesCleartextTraffic`, `networkSecurityConfig`, `testOnly`, `hasFragileUserData`, `requestLegacyExternalStorage` |
 
 ## Combinators
 
@@ -142,6 +144,7 @@ fixture:
     files: ["assets/payload.dex"]
     native_libs: ["lib/arm64-v8a/libjiagu.so"]
     metadata: {android.accessibilityservice: "@xml/config"}
+    flags: {debuggable: true}         # <application> attributes, for `manifest:`
     supers: {"Lcom/x/Svc;": ["Landroid/app/Service;"]}
     js_bridge_classes: ["Lcom/x/Bridge;"]
     components:

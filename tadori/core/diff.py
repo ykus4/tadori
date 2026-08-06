@@ -8,10 +8,15 @@ hostile in an update.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from tadori.core.models import Capability, ScanResult, Severity
+
+#: Suffix that marks a stored scan result rather than an app to scan.
+BASELINE_SUFFIX = ".json"
 
 #: Permissions whose appearance in an update is worth an explicit callout.
 WATCHED_PERMISSIONS = frozenset(
@@ -105,8 +110,8 @@ class Delta:
                 {
                     "rule_id": new.rule_id,
                     "name": new.name,
-                    "from": _exposure(old),
-                    "to": _exposure(new),
+                    "from": old.exposure,
+                    "to": new.exposure,
                 }
                 for old, new in self.escalated
             ],
@@ -115,6 +120,31 @@ class Delta:
             "added_entry_kinds": self.added_entry_kinds,
             "added_native_libs": self.added_native_libs,
         }
+
+
+def is_baseline(path: str | Path) -> bool:
+    """True for a stored scan result (``tadori scan -f json``), not an app."""
+    return Path(path).suffix.lower() == BASELINE_SUFFIX
+
+
+def load_baseline(path: str | Path) -> ScanResult:
+    """Read a scan result written earlier by ``tadori scan -f json``.
+
+    A release gate wants to compare today's build against the last reviewed
+    one, and the reviewed APK is usually not what CI has lying around — the
+    JSON it produced is.
+    """
+    p = Path(path)
+    try:
+        data = json.loads(p.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{p}: not valid JSON ({exc})") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{p}: not a tadori scan result")
+    try:
+        return ScanResult.from_dict(data)
+    except ValueError as exc:
+        raise ValueError(f"{p}: {exc}") from exc
 
 
 def compare(old: ScanResult, new: ScanResult) -> Delta:
@@ -128,7 +158,7 @@ def compare(old: ScanResult, new: ScanResult) -> Delta:
     delta.escalated = [
         (old_caps[k], new_caps[k])
         for k in old_caps.keys() & new_caps.keys()
-        if _exposure_rank(new_caps[k]) > _exposure_rank(old_caps[k])
+        if new_caps[k].exposure_rank > old_caps[k].exposure_rank
     ]
 
     old_perms, new_perms = set(old.app.permissions), set(new.app.permissions)
@@ -151,30 +181,6 @@ def compare(old: ScanResult, new: ScanResult) -> Delta:
     delta.added.sort(key=lambda c: (-c.severity.rank, c.rule_id))
     delta.removed.sort(key=lambda c: (-c.severity.rank, c.rule_id))
     return delta
-
-
-_EXPOSURE_ORDER = ("none", "unknown", "local", "remote")
-
-
-def _exposure(capability: Capability) -> str:
-    best = "none"
-    for match in capability.matches:
-        if match.reachable is None:
-            best = max(best, "unknown", key=_EXPOSURE_ORDER.index)
-            continue
-        path = match.best_path
-        if path is None:
-            continue
-        best = max(
-            best,
-            "remote" if path.entry.kind.is_remote else "local",
-            key=_EXPOSURE_ORDER.index,
-        )
-    return best
-
-
-def _exposure_rank(capability: Capability) -> int:
-    return _EXPOSURE_ORDER.index(_exposure(capability))
 
 
 def _side(result: ScanResult) -> dict[str, Any]:

@@ -258,3 +258,113 @@ def test_lint_reports_metadata_problems():
     assert "malformed ATT&CK id 'nope'" in problems
     assert "reference is not a URL" in problems
     assert "missing 'description'" in problems
+
+
+# ---------------------------------------------------------------------------
+# why-not diagnostics
+# ---------------------------------------------------------------------------
+
+
+def trace_of(spec, ctx):
+    return parse_node(spec, "test").trace(ctx)
+
+
+def test_trace_marks_each_branch_of_an_and():
+    node = [{"api": "Lcom/x/A;->f"}, {"permission": "android.permission.RECEIVE_SMS"}]
+    trace = trace_of(node, context(features(api=["Lcom/x/A;->f()V"])))
+
+    assert not trace.satisfied
+    assert trace.kind == "all"
+    assert [c.satisfied for c in trace.children] == [True, False]
+    assert trace.satisfied_leaves == 1
+
+
+def test_missing_ignores_alternatives_of_a_satisfied_or():
+    node = [
+        {"or": [{"api": "Lcom/x/A;->f"}, {"api": "Lcom/x/B;->g"}]},
+        {"permission": "android.permission.READ_SMS"},
+    ]
+    trace = trace_of(node, context(features(api=["Lcom/x/A;->f()V"])))
+    assert trace.missing == ["permission: android.permission.READ_SMS"]
+
+
+def test_missing_of_a_failed_or_lists_the_alternatives_once():
+    node = {"or": [{"api": "Lcom/x/A;->f"}, {"api": "Lcom/x/B;->g"}]}
+    trace = trace_of(node, context(features(api=["Lcom/x/Z;->z()V"])))
+    assert len(trace.missing) == 1
+    assert "one of (" in trace.missing[0]
+    assert "Lcom/x/A;->f" in trace.missing[0] and "Lcom/x/B;->g" in trace.missing[0]
+
+
+def test_missing_of_a_negation_says_what_must_not_hold():
+    node = {"not": {"api": "Lcom/x/A;->f"}}
+    trace = trace_of(node, context(features(api=["Lcom/x/A;->f()V"])))
+    assert trace.missing == ["api: Lcom/x/A;->f must NOT hold"]
+
+
+def test_a_satisfied_condition_is_missing_nothing():
+    node = [{"api": "Lcom/x/A;->f"}]
+    trace = trace_of(node, context(features(api=["Lcom/x/A;->f()V"])))
+    assert trace.satisfied and trace.missing == []
+
+
+def test_count_trace_reports_how_many_were_found():
+    node = {"count": {"api": "Lcom/x/A;->f", "value": ">=3"}}
+    trace = trace_of(node, context(features(api=["Lcom/x/A;->f()V"] * 2)))
+    assert not trace.satisfied
+    assert "found 2" in trace.description
+    assert trace.children == ()
+
+
+# ---------------------------------------------------------------------------
+# manifest exposure facts
+# ---------------------------------------------------------------------------
+
+
+def facts_with(**kwargs) -> AppFacts:
+    return AppFacts(**kwargs)
+
+
+def evaluate(spec, facts):
+    return parse_node(spec, "test").evaluate(context(facts=facts))
+
+
+def test_exported_leaf_matches_an_unprotected_component():
+    facts = facts_with(
+        exported=[
+            ("provider", "com.x.Files", ""),
+            ("provider", "com.x.Guarded", "com.x.permission.READ"),
+        ]
+    )
+    ok, evidence = evaluate({"exported": "provider:unprotected"}, facts)
+    assert ok
+    assert [e.value for e in evidence] == ["provider com.x.Files"]
+
+
+def test_exported_leaf_can_ask_for_the_guarded_ones():
+    facts = facts_with(
+        exported=[("provider", "com.x.Guarded", "com.x.permission.READ")]
+    )
+    assert evaluate({"exported": "provider:unprotected"}, facts)[0] is False
+    assert evaluate({"exported": "provider:protected"}, facts)[0] is True
+    assert evaluate({"exported": "provider"}, facts)[0] is True
+
+
+def test_exported_leaf_is_typed():
+    facts = facts_with(exported=[("activity", "com.x.Main", "")])
+    assert evaluate({"exported": "provider"}, facts)[0] is False
+    assert evaluate({"exported": "*:unprotected"}, facts)[0] is True
+
+
+def test_manifest_flag_matches_name_and_value():
+    facts = facts_with(flags={"debuggable": "true", "allowBackup": "false"})
+    assert evaluate({"manifest": "debuggable=true"}, facts)[0] is True
+    assert evaluate({"manifest": "allowBackup=true"}, facts)[0] is False
+    assert evaluate({"manifest": "debuggable"}, facts)[0] is True
+    assert evaluate({"manifest": "usesCleartextTraffic=true"}, facts)[0] is False
+
+
+def test_manifest_flag_evidence_carries_the_value():
+    facts = facts_with(flags={"debuggable": "true"})
+    _, evidence = evaluate({"manifest": "debuggable=*"}, facts)
+    assert [e.value for e in evidence] == ["debuggable=true"]

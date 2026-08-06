@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,37 @@ logger = logging.getLogger(__name__)
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 COMPONENT_TAGS = ("activity", "activity-alias", "service", "receiver", "provider")
+
+#: Cross-platform toolkits, and the packaged files that give them away. When
+#: one of these is present most of the app's logic is not in the DEX at all —
+#: a scan of the bytecode sees the Android host, not the program.
+FRAMEWORK_MARKERS: dict[str, tuple[str, ...]] = {
+    "flutter": ("assets/flutter_assets/", "libflutter.so"),
+    "react-native": (
+        "assets/index.android.bundle",
+        "libreactnativejni.so",
+        "libhermes",
+    ),
+    "unity": ("assets/bin/Data/", "libunity.so", "libil2cpp.so"),
+    "xamarin/maui": ("assemblies/", "libmonodroid.so", "libxamarin"),
+    "cordova/ionic": ("assets/www/index.html", "res/xml/config.xml"),
+    "kivy/python": ("assets/private.mp3", "libpython"),
+}
+
+#: Subject common name of the SDK's debug signing key.
+DEBUG_KEY_CN = "Android Debug"
+
+#: ``<application>`` attributes recorded as manifest flags, because they decide
+#: how exposed the app is regardless of what its code does.
+APPLICATION_FLAGS = (
+    "debuggable",
+    "allowBackup",
+    "usesCleartextTraffic",
+    "networkSecurityConfig",
+    "testOnly",
+    "hasFragileUserData",
+    "requestLegacyExternalStorage",
+)
 
 _BIND_PERMISSIONS = {
     "android.permission.BIND_ACCESSIBILITY_SERVICE": "accessibility_service",
@@ -66,9 +98,36 @@ class Manifest:
     components: list[Component] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
     intent_actions: set[str] = field(default_factory=set)
+    #: Application-element attributes a rule may key on — see APPLICATION_FLAGS.
+    flags: dict[str, str] = field(default_factory=dict)
 
     def of_type(self, type_: str) -> list[Component]:
         return [c for c in self.components if c.type == type_]
+
+    def exposed(self) -> list[Component]:
+        """Components any other app on the device can address."""
+        return [c for c in self.components if c.exported]
+
+
+@dataclass
+class Signer:
+    """Who signed the APK, as far as the certificate says.
+
+    Android certificates are self-signed by construction, so the subject is not
+    an identity anyone vouched for — but it is stable across releases, which is
+    exactly what a diff needs, and a debug key in a shipped build is a finding
+    on its own.
+    """
+
+    sha256: str = ""
+    subject: str = ""
+    issuer: str = ""
+    not_before: str = ""
+    not_after: str = ""
+
+    @property
+    def is_debug_key(self) -> bool:
+        return DEBUG_KEY_CN.lower() in self.subject.lower()
 
 
 @dataclass
@@ -82,8 +141,13 @@ class LoadedApp:
     native_libs: list[str] = field(default_factory=list)
     dex_count: int = 0
     signed: str = ""
-    certificate_sha256: str = ""
+    signer: Signer = field(default_factory=Signer)
+    frameworks: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def certificate_sha256(self) -> str:
+        return self.signer.sha256
 
     def app_info(self, method_count: int = 0) -> AppInfo:
         return AppInfo(
@@ -96,10 +160,16 @@ class LoadedApp:
             sdk_target=self.manifest.sdk_target,
             permissions=sorted(self.manifest.permissions),
             native_libs=sorted(self.native_libs),
+            frameworks=list(self.frameworks),
             dex_count=self.dex_count,
             method_count=method_count,
             signed=self.signed,
-            certificate_sha256=self.certificate_sha256,
+            certificate_sha256=self.signer.sha256,
+            certificate_subject=self.signer.subject,
+            certificate_issuer=self.signer.issuer,
+            certificate_not_before=self.signer.not_before,
+            certificate_not_after=self.signer.not_after,
+            debug_signed=self.signer.is_debug_key,
         )
 
 
@@ -148,6 +218,10 @@ def parse_manifest_xml(root: Any) -> Manifest:
         app_name = _attr(app_el, "name")
         if app_name:
             man.application_class = _qualify(man.package, app_name)
+        for flag in APPLICATION_FLAGS:
+            value = _attr(app_el, flag)
+            if value:
+                man.flags[flag] = value.lower()
         for md in app_el.iter("meta-data"):
             key = _attr(md, "name")
             if key:
@@ -248,7 +322,8 @@ def _load_apk(p: Path) -> LoadedApp:
     loaded.native_libs = native
     loaded.warnings.extend(warnings)
     loaded.signed = _signature_schemes(apk)
-    loaded.certificate_sha256 = _certificate_sha256(apk)
+    loaded.signer = _signer(apk)
+    _note_packaging(loaded)
     return loaded
 
 
@@ -274,6 +349,7 @@ def _load_dir(p: Path) -> LoadedApp:
     loaded.files = [str(f.relative_to(p)) for f in p.glob("**/*") if f.is_file()]
     loaded.native_libs = [f for f in loaded.files if f.endswith(".so")]
     loaded.warnings.extend(warnings)
+    _note_packaging(loaded)
     return loaded
 
 
@@ -315,6 +391,57 @@ def _load_dex_files(path: Path, dexes: list[bytes], manifest: Manifest) -> Loade
         dex_count=ok,
         warnings=warnings,
     )
+
+
+def detect_frameworks(files: list[str]) -> list[str]:
+    """Cross-platform toolkits whose marker files are present in the package."""
+    found = [
+        framework
+        for framework, markers in FRAMEWORK_MARKERS.items()
+        if any(marker in path for path in files for marker in (markers))
+    ]
+    return sorted(found)
+
+
+def _note_packaging(loaded: LoadedApp) -> None:
+    """Record what the packaging says about how much of the app is in the DEX."""
+    loaded.frameworks = detect_frameworks(loaded.files)
+    if loaded.frameworks:
+        loaded.warnings.append(
+            f"{', '.join(loaded.frameworks)} app: most of the program lives outside "
+            "the DEX (bundle, IL2CPP or assemblies), so bytecode coverage is partial"
+        )
+    if loaded.signer.is_debug_key:
+        loaded.warnings.append(
+            "signed with the Android debug key — this is not a store build"
+        )
+    if loaded.signed == "v1":
+        loaded.warnings.append(
+            "signed with v1 only; the APK content is not covered by a v2+ signature"
+        )
+
+
+def _signer(apk: Any) -> Signer:
+    """Certificate identity, best-effort across androguard versions."""
+    signer = Signer(sha256=_certificate_sha256(apk))
+    try:
+        certificates = apk.get_certificates()
+    except Exception:  # pragma: no cover - androguard variance
+        return signer
+    if not certificates:
+        return signer
+
+    certificate = certificates[0]
+    with suppress(Exception):  # pragma: no cover - asn1crypto variance
+        signer.subject = str(certificate.subject.human_friendly)
+        signer.issuer = str(certificate.issuer.human_friendly)
+        signer.not_before = certificate["tbs_certificate"]["validity"][
+            "not_before"
+        ].native.isoformat()
+        signer.not_after = certificate["tbs_certificate"]["validity"][
+            "not_after"
+        ].native.isoformat()
+    return signer
 
 
 def _signature_schemes(apk: Any) -> str:

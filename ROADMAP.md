@@ -3,8 +3,13 @@
 ## 0.1.0 — current
 
 Engine (single bytecode walk, entry-point discovery, reachability, library provenance,
-transparent scoring), four output formats, `scan` / `explain` / `rules` / `diff`,
-**58 rules** with **78 fixtures**, a GitHub Action, and release/docs automation.
+transparent scoring), six output formats (text / JSON / SARIF / HTML / DOT / Mermaid),
+`scan` / `triage` / `explain` / `rules` / `diff`, **62 rules** with **88 fixtures**, a
+GitHub Action, and release/docs automation.
+
+Also in place: stable SARIF fingerprints, diffing against a stored JSON scan result
+rather than the old APK, signer and cross-platform-framework facts, and a why-not
+diagnosis for a rule that did not fire.
 
 ## Next
 

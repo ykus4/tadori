@@ -1,8 +1,10 @@
-"""Output formats: terminal, JSON, SARIF 2.1.0 and HTML."""
+"""Output formats: terminal, JSON, SARIF 2.1.0, HTML, and call-chain graphs."""
 
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +15,7 @@ from tadori import __version__
 from tadori.core import attack
 from tadori.core.models import Capability, Evidence, Match, ScanResult, Severity
 
-FORMATS = ("text", "json", "sarif", "html")
+FORMATS = ("text", "json", "sarif", "html", "dot", "mermaid")
 
 SEVERITY_STYLE = {
     Severity.HIGH: "bold red",
@@ -27,6 +29,20 @@ SARIF_LEVEL = {
     Severity.LOW: "note",
     Severity.INFO: "note",
 }
+#: SARIF's numeric severity, so GitHub sorts tadori findings sensibly.
+SARIF_SECURITY_SEVERITY = {
+    Severity.HIGH: "8.0",
+    Severity.MEDIUM: "5.0",
+    Severity.LOW: "3.0",
+    Severity.INFO: "1.0",
+}
+#: Score bands, strongest first: threshold -> (terminal style, HTML class).
+SCORE_BANDS = (
+    (60.0, "bold red", "critical"),
+    (30.0, "red", "high"),
+    (12.0, "yellow", "medium"),
+    (0.0, "green", "low"),
+)
 
 
 def render(result: ScanResult, fmt: str = "text", *, verbose: bool = False) -> str:
@@ -36,6 +52,10 @@ def render(result: ScanResult, fmt: str = "text", *, verbose: bool = False) -> s
         return json.dumps(to_sarif(result), indent=2, ensure_ascii=False)
     if fmt == "html":
         return to_html(result)
+    if fmt == "dot":
+        return to_dot(result)
+    if fmt == "mermaid":
+        return to_mermaid(result)
     if fmt == "text":
         return to_text(result, verbose=verbose)
     raise ValueError(f"unknown format {fmt!r} (expected one of {', '.join(FORMATS)})")
@@ -103,15 +123,26 @@ def _print_header(result: ScanResult, console: Console) -> None:
     facts = [f"{app.method_count:,} methods", f"{app.dex_count} dex"]
     if app.signed:
         facts.append(f"signed {app.signed}")
+    if app.debug_signed:
+        facts.append("[red]debug key[/red]")
     if app.permissions:
         facts.append(f"{len(app.permissions)} permissions")
     if app.native_libs:
         facts.append(f"{len(app.native_libs)} native libs")
+    if app.frameworks:
+        facts.append(f"[yellow]{', '.join(app.frameworks)}[/yellow]")
     console.print(f"  [dim]{' · '.join(facts)}[/dim]")
+    if app.certificate_subject:
+        validity = (
+            f" · valid to {app.certificate_not_after[:10]}"
+            if app.certificate_not_after
+            else ""
+        )
+        console.print(f"  [dim]signer {app.certificate_subject}{validity}[/dim]")
 
     summary = result.summary
     counts = " · ".join(f"{k} {v}" for k, v in summary.items() if v)
-    score_style = _score_style(result.score)
+    score_style, _ = score_band(result.score)
     console.print(
         f"  score [{score_style}]{result.score:g}[/{score_style}]/100 → "
         f"[{score_style}]{result.verdict}[/{score_style}]"
@@ -186,14 +217,12 @@ def _print_footer(result: ScanResult, console: Console) -> None:
     )
 
 
-def _score_style(score: float) -> str:
-    if score >= 60:
-        return "bold red"
-    if score >= 30:
-        return "red"
-    if score >= 12:
-        return "yellow"
-    return "green"
+def score_band(score: float) -> tuple[str, str]:
+    """The (terminal style, HTML class) pair a score falls into."""
+    for threshold, style, css_class in SCORE_BANDS:
+        if score >= threshold:
+            return style, css_class
+    return SCORE_BANDS[-1][1:]
 
 
 def entry_point_table(result: ScanResult, limit: int = 40) -> Table:
@@ -221,7 +250,7 @@ def to_sarif(result: ScanResult) -> dict[str, Any]:
             "help": {"text": _help_text(c)},
             "properties": {
                 "tags": ["android", "capability", *c.attack],
-                "security-severity": _security_severity(c.severity),
+                "security-severity": SARIF_SECURITY_SEVERITY[c.severity],
                 "attack": c.attack,
                 "mbc": c.mbc,
             },
@@ -245,6 +274,9 @@ def to_sarif(result: ScanResult) -> dict[str, Any]:
                     "level": SARIF_LEVEL[capability.severity],
                     "message": {
                         "text": f"{capability.name} in {match.location}.{reach}"
+                    },
+                    "partialFingerprints": {
+                        "tadoriMatch/v1": _fingerprint(capability.rule_id, match)
                     },
                     "locations": [
                         {
@@ -288,6 +320,18 @@ def to_sarif(result: ScanResult) -> dict[str, Any]:
     }
 
 
+def _fingerprint(rule_id: str, match: Match) -> str:
+    """Stable identity for one finding, so code scanning can track it.
+
+    Deliberately built from the rule and the matched method only: the app
+    version, the bytecode offsets and the call chain all change between builds,
+    and a fingerprint that moves with them would open a fresh alert every
+    release for the same finding.
+    """
+    digest = hashlib.sha256(f"{rule_id}\n{match.location}".encode())
+    return digest.hexdigest()[:32]
+
+
 def _help_text(capability: Capability) -> str:
     lines = [capability.description or capability.name]
     if capability.attack:
@@ -299,8 +343,111 @@ def _help_text(capability: Capability) -> str:
     return "\n".join(lines)
 
 
-def _security_severity(severity: Severity) -> str:
-    return {"high": "8.0", "medium": "5.0", "low": "3.0", "info": "1.0"}[severity.value]
+# ---------------------------------------------------------------------------
+# call-chain graphs
+# ---------------------------------------------------------------------------
+
+#: Node fill per severity, for the graph exports.
+GRAPH_COLOURS = {
+    Severity.HIGH: "#d33682",
+    Severity.MEDIUM: "#cb8b00",
+    Severity.LOW: "#268bd2",
+    Severity.INFO: "#93a1a1",
+}
+ENTRY_COLOUR = "#6c71c4"
+
+
+@dataclass(frozen=True)
+class GraphNode:
+    """One method in the exported call-chain graph."""
+
+    id: str
+    label: str
+    role: str  # entry | step | match
+    colour: str = ""
+
+
+def call_graph(result: ScanResult) -> tuple[list[GraphNode], list[tuple[str, str]]]:
+    """Nodes and edges for the best call chain of every reported match.
+
+    Only the best path per match is drawn: the point is a picture an analyst
+    can read in a report, not the full reachability relation.
+    """
+    nodes: dict[str, GraphNode] = {}
+    edges: list[tuple[str, str]] = []
+
+    def node(ref: str, role: str, label: str, colour: str = "") -> str:
+        existing = nodes.get(ref)
+        if existing is not None:
+            # A method that both starts a chain and is matched stays an entry.
+            if existing.role == "step" and role != "step":
+                nodes[ref] = GraphNode(existing.id, label, role, colour)
+            return existing.id
+        node_id = f"n{len(nodes)}"
+        nodes[ref] = GraphNode(node_id, label, role, colour)
+        return node_id
+
+    for capability in result.capabilities:
+        colour = GRAPH_COLOURS[capability.severity]
+        for match in capability.matches:
+            target_label = f"{capability.rule_id}\n{short_ref(match.location)}"
+            target = node(match.location, "match", target_label, colour)
+            path = match.best_path
+            if path is None:
+                continue
+            node(
+                path.entry.method,
+                "entry",
+                f"[{path.entry.kind.value}]\n{short_ref(path.entry.method)}",
+                ENTRY_COLOUR,
+            )
+            steps = list(path.methods)
+            for caller, callee in zip(steps, steps[1:], strict=False):
+                source = node(caller, "step", short_ref(caller))
+                sink = (
+                    target
+                    if callee == match.location
+                    else node(callee, "step", short_ref(callee))
+                )
+                if (source, sink) not in edges:
+                    edges.append((source, sink))
+
+    return list(nodes.values()), edges
+
+
+def to_dot(result: ScanResult) -> str:
+    """Graphviz DOT of the call chains — ``tadori scan -f dot | dot -Tsvg``."""
+    lines = [
+        f"// tadori {__version__} — {result.app.package or result.app.name}",
+        "digraph tadori {",
+        "  rankdir=LR;",
+        '  node [shape=box, style="rounded,filled", fontname="monospace", '
+        'fontsize=10, fillcolor="#ffffff"];',
+    ]
+    nodes, edges = call_graph(result)
+    for node in nodes:
+        label = node.label.replace('"', '\\"').replace("\n", "\\n")
+        colour = f', color="{node.colour}", penwidth=2' if node.colour else ""
+        lines.append(f'  {node.id} [label="{label}"{colour}];')
+    lines.extend(f"  {source} -> {sink};" for source, sink in edges)
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def to_mermaid(result: ScanResult) -> str:
+    """Mermaid flowchart of the call chains, for markdown reports."""
+    lines = [f"%% tadori {__version__} — {result.app.package or result.app.name}"]
+    lines.append("graph LR")
+    nodes, edges = call_graph(result)
+    for node in nodes:
+        label = node.label.replace('"', "'").replace("\n", "<br/>")
+        shape = f'{{{{"{label}"}}}}' if node.role == "entry" else f'["{label}"]'
+        lines.append(f"  {node.id}{shape}")
+    lines.extend(f"  {source} --> {sink}" for source, sink in edges)
+    for node in nodes:
+        if node.colour:
+            lines.append(f"  style {node.id} stroke:{node.colour},stroke-width:2px")
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -320,15 +467,5 @@ def to_html(result: ScanResult) -> str:
         result=result,
         attack_name=attack.name_of,
         version=__version__,
-        score_class=_score_class(result.score),
+        score_class=score_band(result.score)[1],
     )
-
-
-def _score_class(score: float) -> str:
-    if score >= 60:
-        return "critical"
-    if score >= 30:
-        return "high"
-    if score >= 12:
-        return "medium"
-    return "low"

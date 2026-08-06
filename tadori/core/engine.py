@@ -9,10 +9,17 @@ from pathlib import Path
 
 from tadori import __version__
 from tadori.core import entrypoints, graph, ingest, libraries, score
-from tadori.core.features import AppIndex, MethodFeatures, build_index
+from tadori.core.features import AppIndex, MethodFeatures, build_index, ref_class
 from tadori.core.ingest import Manifest
 from tadori.core.models import AppInfo, Capability, Match, ScanResult, Severity
-from tadori.core.rules import AppFacts, EvalContext, Rule, load_rules, vocabulary_for
+from tadori.core.rules import (
+    AppFacts,
+    EvalContext,
+    Rule,
+    Trace,
+    load_rules,
+    vocabulary_for,
+)
 
 DEFAULT_TIMEOUT = 300.0
 
@@ -38,31 +45,39 @@ class ScanOptions:
 
 
 @dataclass
-class _Stats:
-    """Counters collected while matching."""
+class _Run:
+    """State threaded through one matching pass.
 
-    library_hidden: int = 0
-
-
-@dataclass
-class _ScopeCaches:
-    """Lazily merged features for class- and apk-scope evaluation."""
+    Holds what every step needs (the index, the app's facts, the entry-point
+    resolver, the options and the deadline), the lazily merged features that
+    class- and apk-scope rules evaluate against, and the counters the report
+    footer reads back.
+    """
 
     index: AppIndex
-    classes: dict[str, MethodFeatures] = field(default_factory=dict)
-    app: MethodFeatures | None = None
+    facts: AppFacts
+    resolver: entrypoints.EntryPointResolver
+    opts: ScanOptions
+    deadline: float | None = None
+    library_hidden: int = 0
+    _class_features: dict[str, MethodFeatures] = field(default_factory=dict, init=False)
+    _app_features: MethodFeatures | None = field(default=None, init=False)
 
-    def of_class(self, class_name: str) -> MethodFeatures:
-        cached = self.classes.get(class_name)
+    @property
+    def expired(self) -> bool:
+        return self.deadline is not None and time.monotonic() > self.deadline
+
+    def class_features(self, class_name: str) -> MethodFeatures:
+        cached = self._class_features.get(class_name)
         if cached is None:
             cached = self.index.class_features(class_name)
-            self.classes[class_name] = cached
+            self._class_features[class_name] = cached
         return cached
 
-    def of_app(self) -> MethodFeatures:
-        if self.app is None:
-            self.app = self.index.app_features()
-        return self.app
+    def app_features(self) -> MethodFeatures:
+        if self._app_features is None:
+            self._app_features = self.index.app_features()
+        return self._app_features
 
 
 @dataclass
@@ -84,7 +99,9 @@ class Subject:
         return cls(
             index=index,
             manifest=app.manifest,
-            facts=_facts(app),
+            facts=AppFacts.from_manifest(
+                app.manifest, files=app.files, native_libs=app.native_libs
+            ),
             info=app.app_info(method_count=index.method_count),
             warnings=list(app.warnings),
         )
@@ -94,9 +111,30 @@ def scan(target: str | Path, options: ScanOptions | None = None) -> ScanResult:
     """Analyze one app and return its capabilities."""
     opts = options or ScanOptions()
     started = time.monotonic()
-    deadline = started + opts.timeout if opts.timeout else None
+    rules = rules_for(opts)
+    subject = load_subject(target, rules, opts, started=started)
+    return analyze(subject, rules, opts, started=started)
 
-    rules = opts.rules if opts.rules is not None else load_rules(opts.rule_paths)
+
+def rules_for(opts: ScanOptions) -> list[Rule]:
+    return opts.rules if opts.rules is not None else load_rules(opts.rule_paths)
+
+
+def load_subject(
+    target: str | Path,
+    rules: list[Rule],
+    opts: ScanOptions | None = None,
+    *,
+    started: float | None = None,
+) -> Subject:
+    """Load and index an app, ready for ``analyze`` or ``diagnose``.
+
+    Kept separate from ``scan`` so a caller that wants both a result and an
+    explanation pays for the bytecode walk once.
+    """
+    opts = opts or ScanOptions()
+    started = started if started is not None else time.monotonic()
+    deadline = started + opts.timeout if opts.timeout else None
 
     opts.note("loading")
     app = ingest.load(target)
@@ -108,8 +146,7 @@ def scan(target: str | Path, options: ScanOptions | None = None) -> ScanResult:
         call_graph=opts.reachability,
         deadline=deadline,
     )
-
-    return analyze(Subject.from_app(app, index), rules, opts, started=started)
+    return Subject.from_app(app, index)
 
 
 def analyze(
@@ -125,35 +162,37 @@ def analyze(
     deadline = started + opts.timeout if opts.timeout else None
 
     index = subject.index
-    resolver = entrypoints.discover(subject.manifest, index)
-    caches = _ScopeCaches(index=index)
+    run = _Run(
+        index=index,
+        facts=subject.facts,
+        resolver=entrypoints.discover(subject.manifest, index),
+        opts=opts,
+        deadline=deadline,
+    )
 
     opts.note(f"matching {len(rules)} rules")
-    stats = _Stats()
     capabilities: list[Capability] = []
     for rule in rules:
         if rule.severity.rank < opts.min_severity.rank:
             continue
-        found = _apply(
-            rule, index, caches, subject.facts, resolver, opts, deadline, stats
-        )
+        found = _apply(rule, run)
         if found is not None:
             capabilities.append(found)
 
     result = ScanResult(
         app=subject.info,
         capabilities=capabilities,
-        entry_points=resolver.declared,
+        entry_points=run.resolver.declared,
         rules_evaluated=len(rules),
         scanned_at=datetime.now(UTC).isoformat(timespec="seconds"),
         duration_sec=time.monotonic() - started,
         warnings=list(subject.warnings),
         tadori_version=__version__,
-        library_matches_hidden=stats.library_hidden,
+        library_matches_hidden=run.library_hidden,
     )
-    if stats.library_hidden:
+    if run.library_hidden:
         result.warnings.append(
-            f"{stats.library_hidden} match(es) inside bundled libraries were hidden "
+            f"{run.library_hidden} match(es) inside bundled libraries were hidden "
             "(--include-libraries to show them)"
         )
     if index.truncated:
@@ -171,28 +210,87 @@ def analyze(
 
 
 # ---------------------------------------------------------------------------
+# diagnostics
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Diagnosis:
+    """Why a rule did not fire: its condition at the site that came closest."""
+
+    rule_id: str
+    location: str = ""
+    trace: Trace | None = None
+    sites: int = 0
+    matched_sites: list[str] = field(default_factory=list)
+
+    @property
+    def missing(self) -> list[str]:
+        return self.trace.missing if self.trace else []
+
+
+def diagnose(
+    subject: Subject, rule: Rule, opts: ScanOptions | None = None
+) -> Diagnosis:
+    """Find the candidate site that satisfies the most of ``rule``.
+
+    "No match" is not an answer anyone can act on. This reports the site that
+    came closest and which leaves of the condition held there — and, when the
+    condition did match but nothing could reach it, says that instead.
+    """
+    opts = opts or ScanOptions()
+    run = _Run(
+        index=subject.index,
+        facts=subject.facts,
+        resolver=entrypoints.discover(subject.manifest, subject.index),
+        opts=opts,
+    )
+
+    best: Trace | None = None
+    best_location = ""
+    matched: list[str] = []
+    sites = 0
+    for location, features in _candidates(rule, run):
+        sites += 1
+        trace = rule.features.trace(
+            EvalContext(features=features, facts=run.facts, location=location)
+        )
+        if trace.satisfied:
+            matched.append(location)
+        if best is None or _closer(trace, best):
+            best, best_location = trace, location
+
+    return Diagnosis(
+        rule_id=rule.id,
+        location=best_location,
+        trace=best,
+        sites=sites,
+        matched_sites=matched,
+    )
+
+
+def _closer(candidate: Trace, incumbent: Trace) -> bool:
+    """Prefer a satisfied condition, then the site missing the least."""
+    return (candidate.satisfied, candidate.satisfied_leaves) > (
+        incumbent.satisfied,
+        incumbent.satisfied_leaves,
+    )
+
+
+# ---------------------------------------------------------------------------
 # matching
 # ---------------------------------------------------------------------------
 
 
-def _apply(
-    rule: Rule,
-    index: AppIndex,
-    caches: _ScopeCaches,
-    facts: AppFacts,
-    resolver: entrypoints.EntryPointResolver,
-    opts: ScanOptions,
-    deadline: float | None,
-    stats: _Stats,
-) -> Capability | None:
-    matches = _match_sites(rule, index, caches, facts, opts, deadline)
-    if not opts.include_libraries:
+def _apply(rule: Rule, run: _Run) -> Capability | None:
+    matches = _match_sites(rule, run)
+    if not run.opts.include_libraries:
         app_matches = [m for m in matches if m.provenance == libraries.APP]
-        stats.library_hidden += len(matches) - len(app_matches)
+        run.library_hidden += len(matches) - len(app_matches)
         matches = app_matches
-    if rule.scope == "method" and opts.reachability:
-        matches = _annotate_reachability(rule, matches, index, resolver, opts, deadline)
-        if not opts.keep_unreachable:
+    if rule.scope == "method" and run.opts.reachability:
+        matches = _annotate_reachability(rule, matches, run)
+        if not run.opts.keep_unreachable:
             matches = [m for m in matches if m.reachable]
     if not matches:
         return None
@@ -210,20 +308,13 @@ def _apply(
     )
 
 
-def _match_sites(
-    rule: Rule,
-    index: AppIndex,
-    caches: _ScopeCaches,
-    facts: AppFacts,
-    opts: ScanOptions,
-    deadline: float | None,
-) -> list[Match]:
+def _match_sites(rule: Rule, run: _Run) -> list[Match]:
     matches: list[Match] = []
-    for location, features in _candidates(rule, index, caches):
-        if deadline is not None and time.monotonic() > deadline:
+    for location, features in _candidates(rule, run):
+        if run.expired:
             break
         ok, evidence = rule.features.evaluate(
-            EvalContext(features=features, facts=facts, location=location)
+            EvalContext(features=features, facts=run.facts, location=location)
         )
         if ok:
             matches.append(
@@ -234,14 +325,12 @@ def _match_sites(
                     provenance=libraries.provenance(location),
                 )
             )
-            if len(matches) >= opts.max_matches_per_rule:
+            if len(matches) >= run.opts.max_matches_per_rule:
                 break
     return matches
 
 
-def _candidates(
-    rule: Rule, index: AppIndex, caches: _ScopeCaches
-) -> list[tuple[str, MethodFeatures]]:
+def _candidates(rule: Rule, run: _Run) -> list[tuple[str, MethodFeatures]]:
     """Sites a rule is evaluated against, given its scope.
 
     Normally only methods that recorded at least one vocabulary hit are
@@ -249,6 +338,7 @@ def _candidates(
     needs one. Rules that match a *name* (``method:``/``class:``) need the full
     set instead.
     """
+    index = run.index
     if rule.scope == "method":
         if rule.needs_every_site:
             return [
@@ -259,28 +349,21 @@ def _candidates(
         classes = (
             sorted(index.internal_classes)
             if rule.needs_every_site
-            else sorted({location.split("->", 1)[0] for location in index.features})
+            else sorted({ref_class(location) for location in index.features})
         )
-        return [(cls, caches.of_class(cls)) for cls in classes]
-    return [("apk", caches.of_app())]
+        return [(cls, run.class_features(cls)) for cls in classes]
+    return [("apk", run.app_features())]
 
 
-def _annotate_reachability(
-    rule: Rule,
-    matches: list[Match],
-    index: AppIndex,
-    resolver: entrypoints.EntryPointResolver,
-    opts: ScanOptions,
-    deadline: float | None,
-) -> list[Match]:
-    max_hops = rule.reach.max_hops if rule.reach else opts.max_hops
+def _annotate_reachability(rule: Rule, matches: list[Match], run: _Run) -> list[Match]:
+    max_hops = rule.reach.max_hops if rule.reach else run.opts.max_hops
     for match in matches:
         match.paths = graph.find_paths(
-            index,
-            resolver,
+            run.index,
+            run.resolver,
             match.location,
             max_hops=max_hops,
-            deadline=deadline,
+            deadline=run.deadline,
         )
         if rule.reach is None:
             match.reachable = bool(match.paths)
@@ -290,16 +373,3 @@ def _annotate_reachability(
         if accepted:
             match.paths = accepted
     return matches
-
-
-def _facts(app: ingest.LoadedApp) -> AppFacts:
-    manifest = app.manifest
-    return AppFacts(
-        package=manifest.package,
-        permissions=set(manifest.permissions),
-        intent_actions=set(manifest.intent_actions),
-        components=[(c.type, c.special_kind) for c in manifest.components],
-        files=app.files,
-        native_libs=app.native_libs,
-        metadata=dict(manifest.metadata),
-    )

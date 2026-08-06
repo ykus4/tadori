@@ -25,16 +25,17 @@ tadori scan app.apk
 
 | command | what it does |
 |---|---|
-| `tadori scan APP` | capability report; `-f text\|json\|sarif\|html`, `--fail-on high` |
-| `tadori explain RULE APP` | why one rule fired, with full call chains |
+| `tadori scan APP` | capability report; `-f text\|json\|sarif\|html\|dot\|mermaid`, `--fail-on high` |
+| `tadori triage PATHS…` | scan a directory of apps and rank them worst-first (`-f table\|json\|csv`) |
+| `tadori explain RULE APP` | why one rule fired — or, when it did not, which part of the condition failed |
 | `tadori rules list\|show\|lint\|test` | inspect, validate and fixture-test the rule pack |
-| `tadori diff OLD NEW` | what a newer build of the same app gained |
+| `tadori diff OLD NEW` | what a newer build gained; either side may be a stored `tadori scan -f json` result |
 
 Inputs: `.apk`, a bare `.dex`, or a directory of `classes*.dex`.
 
 ## Read next
 
-- [Rule pack](rule-pack.md) — all 58 rules, grouped by ATT&CK tactic
+- [Rule pack](rule-pack.md) — all 62 rules, grouped by ATT&CK tactic
 - [Writing rules](rules.md) — every feature key, combinator, scope and fixture field
 - [Design notes](design.md) — how the single bytecode walk, entry-point discovery and
   reachability analysis work, and where their precision ends

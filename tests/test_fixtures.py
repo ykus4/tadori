@@ -55,3 +55,63 @@ def test_fixture_naming_a_missing_rule_fails_loudly():
     outcome = fixtures.run(ghost, BY_ID)
     assert not outcome.passed
     assert "no such rule" in outcome.detail
+
+
+# ---------------------------------------------------------------------------
+# why a fixture failed
+# ---------------------------------------------------------------------------
+
+SMS_RULE = "TAD-CRED-0002"
+
+
+def broken(**app) -> fixtures.Fixture:
+    return fixtures.Fixture(name="deliberately broken", rule_id=SMS_RULE, app=app)
+
+
+def test_a_failing_positive_fixture_names_the_missing_condition():
+    fixture = broken(
+        components=[{"type": "receiver", "name": "com.x.R"}],
+        methods=[
+            {
+                "ref": "Lcom/x/R;->onReceive(Landroid/content/Context;Landroid/content/Intent;)V",
+                "api": [
+                    "Landroid/telephony/SmsMessage;->getMessageBody()Ljava/lang/String;"
+                ],
+            }
+        ],
+    )
+    outcome = fixtures.run(fixture, BY_ID)
+    assert not outcome.passed
+    assert "expected a match" in outcome.detail
+    assert "android.permission.RECEIVE_SMS" in outcome.detail
+    # The api half held, so its alternatives must not be blamed.
+    assert "getDisplayMessageBody" not in outcome.detail
+
+
+def test_a_fixture_with_no_relevant_feature_says_so():
+    outcome = fixtures.run(broken(methods=[{"ref": "Lcom/x/A;->f()V"}]), BY_ID)
+    assert "no site in the fixture carries a relevant feature" in outcome.detail
+
+
+def test_diagnose_finds_the_closest_site():
+    from tadori.core import engine
+
+    subject = fixtures.build_subject(
+        {
+            "permissions": ["android.permission.RECEIVE_SMS"],
+            "methods": [
+                {
+                    "ref": "Lcom/x/Far;->a()V",
+                    "api": ["Ljava/net/URL;->openConnection()V"],
+                },
+                {
+                    "ref": "Lcom/x/Near;->b()V",
+                    "string": ["content://sms"],
+                },
+            ],
+        }
+    )
+    diagnosis = engine.diagnose(subject, BY_ID[SMS_RULE])
+    assert diagnosis.location == "Lcom/x/Near;->b()V"
+    assert diagnosis.sites >= 2
+    assert diagnosis.matched_sites == ["Lcom/x/Near;->b()V"]
